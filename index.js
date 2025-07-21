@@ -3,7 +3,7 @@ const { middleware, Client } = require('@line/bot-sdk');
 
 // 環境変数から読み込み
 const config = {
-  channelSecret:  process.env.LINE_CHANNEL_SECRET,
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
   channelAccessToken: process.env.LINE_CHANNEL_TOKEN,
 };
 
@@ -40,12 +40,13 @@ async function handleEvent(event) {
   const text   = event.message.text.trim();
   const reply  = event.replyToken;
 
-  // 初回はメーカーから
+  // 初回はメーカーから質問
   if (!sessions.has(userId)) {
     sessions.set(userId, { step: 0, data: {} });
     return client.replyMessage(reply, { type: 'text', text: QUESTIONS.maker });
   }
 
+  // 回答を保存して次のステップへ
   const session = sessions.get(userId);
   const field   = FIELDS[session.step];
   session.data[field] = text;
@@ -59,7 +60,7 @@ async function handleEvent(event) {
     });
   }
 
-  // 必須４項目揃ったらダミー結果を返す
+  // 必須４項目が揃ったのでダミー結果を返す
   const { maker, model, budget, mileage } = session.data;
   const dummyResults = [{
     title: `${maker} ${model}`,
@@ -82,15 +83,20 @@ async function handleEvent(event) {
       `価格:${dummyResults[0].price}\n` +
       `走行:${dummyResults[0].km}\n` +
       `詳細: ${dummyResults[0].url}`
-  );
+  });
 
+  // 会話状態をクリア
   sessions.delete(userId);
 }
 
+// どこかで例外があっても 200 を返す
 app.use((err, req, res, next) => {
   console.error(err);
   res.sendStatus(200);
 });
 
+// ポートで待ち受け
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`⚡️ Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`⚡️ Server running on port ${PORT}`);
+});
