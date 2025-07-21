@@ -1,7 +1,7 @@
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
 
-// 環境変数から読み込み
+// 環境変数
 const config = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
   channelAccessToken: process.env.LINE_CHANNEL_TOKEN,
@@ -10,31 +10,33 @@ const config = {
 const client = new Client(config);
 const app = express();
 
-// express.json を使いつつ、生ボディも取り出せるように verify で buf を保存
+// 1) express.json に verify で rawBody をセット
 app.use(express.json({
   verify: (req, res, buf) => {
-    // ミドルウェアで使うために rawBody に保存
-    req.rawBody = buf;
+    req.rawBody = buf.toString('utf8');
   }
 }));
 
-// セッション管理用（今回はメモリ）
+// セッション保持用
 const sessions = new Map();
-
-const FIELDS = ['maker', 'model', 'budget', 'mileage'];
+const FIELDS = ['maker','model','budget','mileage'];
 const QUESTIONS = {
-  maker:   '🚗 まず「メーカー」を教えてください（例：トヨタ、スバル）',
-  model:   '🚗 次に「車名」を教えてください（例：ヤリス、サンバー）',
-  budget:  '💰 ご予算はいくらですか？（例：50万、200万）',
-  mileage: '📏 走行距離の上限を教えてください（例：1万km、5万km）',
+  maker:   '🚗 メーカーを教えてください（例：トヨタ、スバル）',
+  model:   '🚗 車名を教えてください（例：ヤリス、サンバー）',
+  budget:  '💰 予算を教えてください（例：50万、200万）',
+  mileage: '📏 走行距離上限を教えてください（例：1万km、5万km）',
 };
 
+// 2) Webhook 受け口：署名検証→ハンドラ
 app.post(
   '/webhook',
-  // 署名検証時に rawBody を使うように設定
-  (req, res, next) => middleware({ ...config, payload: req.rawBody })(req, res, next),
+  // signature middleware に rawBody を渡す
+  (req, res, next) => middleware({ 
+    channelSecret: config.channelSecret, 
+    payload: req.rawBody 
+  })(req, res, next),
   async (req, res) => {
-    // JSON.parse は不要。express.json がパース済み
+    // この時点で req.body はパース済み
     const events = req.body.events;
     await Promise.all(events.map(handleEvent));
     res.sendStatus(200);
@@ -44,62 +46,52 @@ app.post(
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') return;
 
-  const userId = event.source.userId;
-  const text   = event.message.text.trim();
-  const reply  = event.replyToken;
+  const uid   = event.source.userId;
+  const text  = event.message.text.trim();
+  const token = event.replyToken;
 
-  if (!sessions.has(userId)) {
-    sessions.set(userId, { step: 0, data: {} });
-    return client.replyMessage(reply, { type: 'text', text: QUESTIONS.maker });
+  // 初回質問
+  if (!sessions.has(uid)) {
+    sessions.set(uid, { step: 0, data: {} });
+    return client.replyMessage(token, { type:'text', text: QUESTIONS.maker });
   }
 
-  const session = sessions.get(userId);
+  // 回答保存＆次へ
+  const session = sessions.get(uid);
   const field   = FIELDS[session.step];
   session.data[field] = text;
   session.step++;
 
   if (session.step < FIELDS.length) {
-    const nextField = FIELDS[session.step];
-    return client.replyMessage(reply, {
-      type: 'text',
-      text: QUESTIONS[nextField],
-    });
+    const next = FIELDS[session.step];
+    return client.replyMessage(token, { type:'text', text: QUESTIONS[next] });
   }
 
-  // 必須４項目揃ったらダミー結果を返す
+  // 全項目そろったらダミー検索結果を返す
   const { maker, model, budget, mileage } = session.data;
-  const dummyResults = [{
-    title: `${maker} ${model}`,
-    price: `${budget}円以下`,
-    km:    `${mileage}km以下`,
-    url:   'https://iauc-example.com/item/123',
-  }];
+  const resultText =
+    `🔍 検索条件\n` +
+    `メーカー: ${maker}\n` +
+    `車名:     ${model}\n` +
+    `予算:     ${budget}\n` +
+    `走行距離: ${mileage}\n\n` +
+    `【ダミー結果】\n` +
+    `${maker} ${model}\n` +
+    `価格: ${budget}円以下\n` +
+    `走行: ${mileage}km以下\n` +
+    `詳細: https://iauc-example.com/item/123`;
 
-  await client.replyMessage(reply, {
-    type: 'text',
-    text:
-      `🔍 検索条件:\n` +
-      `メーカー: ${maker}\n` +
-      `車名:     ${model}\n` +
-      `予算:     ${budget}\n` +
-      `走行距離: ${mileage}\n\n` +
-      `----\n` +
-      `【ダミー結果】\n` +
-      `${dummyResults[0].title}\n` +
-      `価格:${dummyResults[0].price}\n` +
-      `走行:${dummyResults[0].km}\n` +
-      `詳細: ${dummyResults[0].url}`
-  });
+  await client.replyMessage(token, { type:'text', text: resultText });
 
-  sessions.delete(userId);
+  sessions.delete(uid);
 }
 
+// エラー時も 200 応答
 app.use((err, req, res, next) => {
   console.error(err);
   res.sendStatus(200);
 });
 
+// 起動
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`⚡️ Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`⚡️ Server running on port ${PORT}`));
