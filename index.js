@@ -66,24 +66,31 @@ async function handleEvent(event) {
     const next = FIELDS[session.step];
     return client.replyMessage(token, { type:'text', text: QUESTIONS[next] });
   }
+// 全項目そろったらまず終了メッセージを投げる
+await client.replyMessage(token, {
+  type: 'text',
+  text: '✅ 条件が揃いました。検索結果を取得中…少々お待ちください！'
+});
 
-  // 全項目そろったらダミー検索結果を返す
-  const { maker, model, budget, mileage } = session.data;
-  const resultText =
-    `🔍 検索条件\n` +
-    `メーカー: ${maker}\n` +
-    `車名:     ${model}\n` +
-    `予算:     ${budget}\n` +
-    `走行距離: ${mileage}\n\n` +
-    `【ダミー結果】\n` +
-    `${maker} ${model}\n` +
-    `価格: ${budget}円以下\n` +
-    `走行: ${mileage}km以下\n` +
-    `詳細: https://iauc-example.com/item/123`;
+// ダミー検索結果の返信
+const { maker, model, budget, mileage } = session.data;
+const resultText =
+  `🔍 検索条件\n` +
+  `メーカー: ${maker}\n` +
+  `車名:     ${model}\n` +
+  `予算:     ${budget}\n` +
+  `走行距離: ${mileage}\n\n` +
+  `----\n` +
+  `【ダミー結果】\n` +
+  `${maker} ${model}\n` +
+  `価格: ${budget}円以下\n` +
+  `走行: ${mileage}km以下\n` +
+  `詳細: https://iauc-example.com/item/123`;
 
-  await client.replyMessage(token, { type:'text', text: resultText });
+await client.replyMessage(token, { type: 'text', text: resultText });
 
-  sessions.delete(uid);
+// 会話セッションをクリア
+sessions.delete(uid);
 }
 
 // エラー時も 200 応答
