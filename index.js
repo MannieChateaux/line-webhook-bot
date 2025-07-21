@@ -10,10 +10,17 @@ const config = {
 const client = new Client(config);
 const app = express();
 
-// ユーザーごとの会話ステートを簡易保持
+// express.json を使いつつ、生ボディも取り出せるように verify で buf を保存
+app.use(express.json({
+  verify: (req, res, buf) => {
+    // ミドルウェアで使うために rawBody に保存
+    req.rawBody = buf;
+  }
+}));
+
+// セッション管理用（今回はメモリ）
 const sessions = new Map();
 
-// 会話ステート設計
 const FIELDS = ['maker', 'model', 'budget', 'mileage'];
 const QUESTIONS = {
   maker:   '🚗 まず「メーカー」を教えてください（例：トヨタ、スバル）',
@@ -24,10 +31,11 @@ const QUESTIONS = {
 
 app.post(
   '/webhook',
-  express.raw({ type: 'application/json' }),
-  middleware(config),
+  // 署名検証時に rawBody を使うように設定
+  (req, res, next) => middleware({ ...config, payload: req.rawBody })(req, res, next),
   async (req, res) => {
-    const events = JSON.parse(req.body.toString('utf8')).events;
+    // JSON.parse は不要。express.json がパース済み
+    const events = req.body.events;
     await Promise.all(events.map(handleEvent));
     res.sendStatus(200);
   }
@@ -40,13 +48,11 @@ async function handleEvent(event) {
   const text   = event.message.text.trim();
   const reply  = event.replyToken;
 
-  // 初回はメーカーから質問
   if (!sessions.has(userId)) {
     sessions.set(userId, { step: 0, data: {} });
     return client.replyMessage(reply, { type: 'text', text: QUESTIONS.maker });
   }
 
-  // 回答を保存して次のステップへ
   const session = sessions.get(userId);
   const field   = FIELDS[session.step];
   session.data[field] = text;
@@ -60,7 +66,7 @@ async function handleEvent(event) {
     });
   }
 
-  // 必須４項目が揃ったのでダミー結果を返す
+  // 必須４項目揃ったらダミー結果を返す
   const { maker, model, budget, mileage } = session.data;
   const dummyResults = [{
     title: `${maker} ${model}`,
@@ -85,17 +91,14 @@ async function handleEvent(event) {
       `詳細: ${dummyResults[0].url}`
   });
 
-  // 会話状態をクリア
   sessions.delete(userId);
 }
 
-// どこかで例外があっても 200 を返す
 app.use((err, req, res, next) => {
   console.error(err);
   res.sendStatus(200);
 });
 
-// ポートで待ち受け
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`⚡️ Server running on port ${PORT}`);
