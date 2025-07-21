@@ -66,31 +66,65 @@ async function handleEvent(event) {
     const next = FIELDS[session.step];
     return client.replyMessage(token, { type:'text', text: QUESTIONS[next] });
   }
-  // ─── 終了メッセージ ────────────────────
-  await client.replyMessage(token, {
-    type: 'text',
-    text: '✅ 条件が揃いました。検索結果を取得中…少々お待ちください！'
-  });
+// ─── 終了メッセージ ────────────────────
+await client.replyMessage(token, {
+  type: 'text',
+  text: '✅ 条件が揃いました。検索結果を取得中…少々お待ちください！'
+});
 
-  // ─── ダミー検索結果 (のちに IAuc 実データに置換) ────────────────────
-  const { maker, model, budget, mileage } = session.data;
-  const resultText =
-    `🔍 検索条件\n` +
-    `メーカー: ${maker}\n` +
-    `車名:     ${model}\n` +
-    `予算:     ${budget}\n` +
-    `走行距離: ${mileage}\n\n` +
-    `----\n` +
-    `【ダミー結果】\n` +
-    `${maker} ${model}\n` +
-    `価格: ${budget}円以下\n` +
-    `走行: ${mileage}km以下\n` +
-    `詳細: https://iauc-example.com/item/123`;
+// ─── IAuc 実データ取得 ────────────────────
+const results = await fetchIaucResults(session.data);
 
-  await client.replyMessage(token, { type: 'text', text: resultText });
+// ─── Flex メッセージ用バブル生成 ────────────────────
+const bubbles = results.slice(0,5).map(item => ({
+  type: 'bubble',
+  hero: {
+    type: 'image',
+    url: item.imageUrl || 'https://via.placeholder.com/240',
+    size: 'full',
+    aspectRatio: '1:1',
+    aspectMode: 'cover'
+  },
+  body: {
+    type: 'box',
+    layout: 'vertical',
+    contents: [
+      { type: 'text', text: item.title, weight:'bold', size:'md' },
+      { type: 'text', text: item.price, margin:'sm' },
+      { type: 'text', text: item.km, margin:'sm' },
+    ]
+  },
+  footer: {
+    type: 'box',
+    layout: 'vertical',
+    spacing: 'sm',
+    contents: [
+      {
+        type: 'button',
+        style: 'link',
+        height: 'sm',
+        action: {
+          type: 'uri',
+          label: '詳細を見る',
+          uri: item.url
+        }
+      }
+    ]
+  }
+}));
 
-  // ─── 会話セッションをクリア ────────────────────
-  sessions.delete(uid);
+// ─── Flex メッセージで検索結果を返信 ────────────────────
+await client.replyMessage(token, {
+  type: 'flex',
+  altText: 'IAuc 検索結果はこちらです',
+  contents: {
+    type: 'carousel',
+    contents: bubbles
+  }
+});
+
+// ─── 会話セッションをクリア ────────────────────
+sessions.delete(uid);
 }
 
 // エラー時も 200 応答
