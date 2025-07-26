@@ -1,6 +1,7 @@
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
 const axios = require('axios');       // ← 追加
+const puppeteer = require('puppeteer');
 
 // 環境変数
 const config = {
@@ -44,23 +45,51 @@ app.post(
   }
 );
 
-// 46行目（ここから丸ごと置き換え）
-async function fetchIaucResults({ maker, model, budget, mileage }) {
-  const endpoint = 'https://api.iauc.example.com/search';
-  const response = await axios.get(endpoint, {
-    params: { maker, model, budget, mileage },
-    headers: { Authorization: `Bearer ${process.env.IAUC_API_KEY}` },
-  });
-  const rawItems = response.data.items || [];
-  return rawItems.map(item => ({
-    title: item.item_title,
-    price: item.price,
-    km: item.km,
-    imageUrl: item.img_url,
-    url: item.url,
-  }));
-}
-// 63行目（ここまで）
++ // ―― IAuc 実データ取得 (ヘッドレススクレイピング) ―――
++ async function fetchIaucResults({ maker, model, budget, mileage }) {
++   const browser = await puppeteer.launch({
++     args: ['--no-sandbox', '--disable-setuid-sandbox']
++   });
++   const page = await browser.newPage();
++
++   // 1) ログインページへ
++   await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
++
++   // 2) ID/PW 入力→ログイン
++   await page.type('#userid',   process.env.IAUC_USER_ID);
++   await page.type('#password', process.env.IAUC_PASSWORD);
++   await Promise.all([
++     page.click('input[type=submit]'),
++     page.waitForNavigation({ waitUntil: 'networkidle2' }),
++   ]);
++
++   // 3) 検索フォームに値をセット
++   await page.select('select[name=maker]',   maker);
++   await page.select('select[name=model]',   model);
++   await page.type  ('input[name=budget]',  budget);
++   await page.type  ('input[name=mileage]', mileage);
++
++   // 4) 検索実行
++   await Promise.all([
++     page.click('button#searchButton'),
++     page.waitForNavigation({ waitUntil: 'networkidle2' }),
++   ]);
++
++   // 5) 結果をスクレイピング
++   const items = await page.$$eval('.result-item', cards =>
++     cards.map(card => {
++       const title    = card.querySelector('.item-title')?.textContent.trim() || '';
++       const price    = card.querySelector('.item-price')?.textContent.trim() || '';
++       const km       = card.querySelector('.item-km')?.textContent.trim()    || '';
++       const imageUrl = card.querySelector('img')?.src || '';
++       const url      = card.querySelector('a.details')?.href || '';
++       return { title, price, km, imageUrl, url };
++     })
++   );
++
++   await browser.close();
++   return items;
++ }
 
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') return;
@@ -92,8 +121,52 @@ async function handleEvent(event) {
 +   text: '✅ 条件が揃いました。検索結果を取得中…少々お待ちください！'
 + });
 
-+ // —— IAuc 実データ取得 —————————
-+ const results = await fetchIaucResults(session.data);
+// ―― IAuc 実データ取得関数 ―――
+async function fetchIaucResults({ maker, model, budget, mileage }) {
+  // Puppeteer をヘッドレスモードで起動
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  });
+  const page = await browser.newPage();
+
+  // 1) ログインページへ
+  await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
+
+  // 2) ID と PASSWORD を入力してログイン
+  await page.type('#userid', process.env.IAUC_USER_ID);
+  await page.type('#password', process.env.IAUC_PASSWORD);
+  await Promise.all([
+    page.click('input[type=submit]'),
+    page.waitForNavigation({ waitUntil: 'networkidle2' }),
+  ]);
+
+  // 3) 検索フォームに各条件をセット
+  await page.select('select[name=maker]', maker);
+  await page.select('select[name=model]', model);
+  await page.type('input[name=budget]', budget);
+  await page.type('input[name=mileage]', mileage);
+
+  // 4) 検索ボタンをクリックして結果ページへ
+  await Promise.all([
+    page.click('button#searchButton'),
+    page.waitForNavigation({ waitUntil: 'networkidle2' }),
+  ]);
+
+  // 5) 結果リストをスクレイピング
+  const items = await page.$$eval('.result-item', cards =>
+    cards.map(card => {
+      const title    = card.querySelector('.item-title')?.textContent.trim() || '';
+      const price    = card.querySelector('.item-price')?.textContent.trim() || '';
+      const km       = card.querySelector('.item-km')?.textContent.trim()    || '';
+      const imageUrl = card.querySelector('img')?.src || '';
+      const url      = card.querySelector('a.details')?.href || '';
+      return { title, price, km, imageUrl, url };
+    })
+  );
+
+  await browser.close();
+  return items;
+}
 
 + // —— Flex メッセージ用バブル生成 —————————
 + const bubbles = results.slice(0,5).map(item => ({
