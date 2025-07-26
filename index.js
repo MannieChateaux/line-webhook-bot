@@ -42,54 +42,55 @@ app.post(
     const events = req.body.events;
     await Promise.all(events.map(handleEvent));
     res.sendStatus(200);
-  }
+}
 );
 
-+ // ―― IAuc 実データ取得 (ヘッドレススクレイピング) ―――
-+ async function fetchIaucResults({ maker, model, budget, mileage }) {
-+   const browser = await puppeteer.launch({
-+     args: ['--no-sandbox', '--disable-setuid-sandbox']
-+   });
-+   const page = await browser.newPage();
-+
-+   // 1) ログインページへ
-+   await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
-+
-+   // 2) ID/PW 入力→ログイン
-+   await page.type('#userid',   process.env.IAUC_USER_ID);
-+   await page.type('#password', process.env.IAUC_PASSWORD);
-+   await Promise.all([
-+     page.click('input[type=submit]'),
-+     page.waitForNavigation({ waitUntil: 'networkidle2' }),
-+   ]);
-+
-+   // 3) 検索フォームに値をセット
-+   await page.select('select[name=maker]',   maker);
-+   await page.select('select[name=model]',   model);
-+   await page.type  ('input[name=budget]',  budget);
-+   await page.type  ('input[name=mileage]', mileage);
-+
-+   // 4) 検索実行
-+   await Promise.all([
-+     page.click('button#searchButton'),
-+     page.waitForNavigation({ waitUntil: 'networkidle2' }),
-+   ]);
-+
-+   // 5) 結果をスクレイピング
-+   const items = await page.$$eval('.result-item', cards =>
-+     cards.map(card => {
-+       const title    = card.querySelector('.item-title')?.textContent.trim() || '';
-+       const price    = card.querySelector('.item-price')?.textContent.trim() || '';
-+       const km       = card.querySelector('.item-km')?.textContent.trim()    || '';
-+       const imageUrl = card.querySelector('img')?.src || '';
-+       const url      = card.querySelector('a.details')?.href || '';
-+       return { title, price, km, imageUrl, url };
-+     })
-+   );
-+
-+   await browser.close();
-+   return items;
-+ }
+
+// — IAuc 実データ取得関数 (ヘッドレススクレイピング) —
+async function fetchIaucResults({ maker, model, budget, mileage }) {
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  const page = await browser.newPage();
+
+  // 1) ログインページへ
+  await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
+
+  // 2) ID/PW 入力→ログイン
+  await page.type('#userid', process.env.IAUC_USER_ID);
+  await page.type('#password', process.env.IAUC_PASSWORD);
+  await Promise.all([
+    page.click('input[type=submit]'),
+    page.waitForNavigation({ waitUntil: 'networkidle2' })
+  ]);
+
+  // 3) 検索フォームに値をセット
+  await page.select('select[name=maker]', maker);
+  await page.select('select[name=model]', model);
+  await page.type('input[name=budget]', budget);
+  await page.type('input[name=mileage]', mileage);
+
+  // 4) 検索実行
+  await Promise.all([
+    page.click('button#searchButton'),
+    page.waitForNavigation({ waitUntil: 'networkidle2' })
+  ]);
+
+  // 5) 結果をスクレイピング
+  const items = await page.$$eval('.result-item', cards =>
+    cards.map(card => {
+      const title    = card.querySelector('.item-title')?.textContent.trim() || '';
+      const price    = card.querySelector('.item-price')?.textContent.trim() || '';
+      const km       = card.querySelector('.item-km')?.textContent.trim() || '';
+      const imageUrl = card.querySelector('img')?.src                   || '';
+      const url      = card.querySelector('a.details')?.href            || '';
+      return { title, price, km, imageUrl, url };
+    })
+  );
+
+  await browser.close();
+  return items;
+}
 
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') return;
@@ -116,10 +117,10 @@ async function handleEvent(event) {
   }
  
   // —— 終了メッセージ —————————
-+ await client.replyMessage(token, {
-+   type: 'text',
-+   text: '✅ 条件が揃いました。検索結果を取得中…少々お待ちください！'
-+ });
+ await client.replyMessage(token, {
+   type: 'text',
+   text: '✅ 条件が揃いました。検索結果を取得中…少々お待ちください！'
+ });
 
 // ―― IAuc 実データ取得関数 ―――
 async function fetchIaucResults({ maker, model, budget, mileage }) {
@@ -168,53 +169,53 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
   return items;
 }
 
-+ // —— Flex メッセージ用バブル生成 —————————
-+ const bubbles = results.slice(0,5).map(item => ({
-+   type: 'bubble',
-+   hero: {
-+     type: 'image',
-+     url: item.imageUrl || 'https://via.placeholder.com/240',
-+     size: 'full',
-+     aspectRatio: '1:1',
-+     aspectMode: 'cover',
-+   },
-+   body: {
-+     type: 'box',
-+     layout: 'vertical',
-+     contents: [
-+       { type: 'text', text: item.title, weight: 'bold', size: 'md' },
-+       { type: 'text', text: `${item.price}円以下`, margin: 'sm' },
-+       { type: 'text', text: `${item.km}km以下`, margin: 'sm' },
-+     ],
-+   },
-+   footer: {
-+     type: 'box',
-+     layout: 'vertical',
-+     spacing: 'sm',
-+     contents: [
-+       {
-+         type: 'button',
-+         style: 'link',
-+         height: 'sm',
-+         action: {
-+           type: 'uri',
-+           label: '詳細を見る',
-+           uri: item.url,
-+         },
-+       },
-+     ],
-+   },
-+ }));
-
-+ // —— Flex メッセージで検索結果を返信 —————————
-+ await client.replyMessage(token, {
-+   type: 'flex',
-+   altText: 'IAuc 検索結果はこちらです',
-+   contents: {
-+     type: 'carousel',
-+     contents: bubbles,
-+   },
-+ });
+ // —— Flex メッセージ用バブル生成 —————————
+ const bubbles = results.slice(0,5).map(item => ({
+   type: 'bubble',
+   hero: {
+     type: 'image',
+     url: item.imageUrl || 'https://via.placeholder.com/240',
+     size: 'full',
+     aspectRatio: '1:1',
+     aspectMode: 'cover',
+   },
+   body: {
+     type: 'box',
+     layout: 'vertical',
+     contents: [
+       { type: 'text', text: item.title, weight: 'bold', size: 'md' },
+       { type: 'text', text: `${item.price}円以下`, margin: 'sm' },
+       { type: 'text', text: `${item.km}km以下`, margin: 'sm' },
+     ],
+   },
+   footer: {
+     type: 'box',
+     layout: 'vertical',
+     spacing: 'sm',
+     contents: [
+       {
+         type: 'button',
+         style: 'link',
+         height: 'sm',
+         action: {
+           type: 'uri',
+           label: '詳細を見る',
+           uri: item.url,
+         },
+       },
+     ],
+   },
+ }));
+ 
+  // —— Flex メッセージで検索結果を返信 —————————
+ await client.replyMessage(token, {
+   type: 'flex',
+   altText: 'IAuc 検索結果はこちらです',
+   contents: {
+     type: 'carousel',
+     contents: bubbles,
+   },
+ });
 
   // —— 会話セッションをクリア —————————
   sessions.delete(uid);
