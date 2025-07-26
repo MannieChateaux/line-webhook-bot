@@ -44,13 +44,23 @@ app.post(
   }
 );
 
-// — IAuc 実データ取得関数 ——————————
+// 46行目（ここから丸ごと置き換え）
 async function fetchIaucResults({ maker, model, budget, mileage }) {
-  const res = await axios.get('https://api.iauc.example.com/search', {
-    params: { maker, model, budget, mileage }
+  const endpoint = 'https://api.iauc.example.com/search';
+  const response = await axios.get(endpoint, {
+    params: { maker, model, budget, mileage },
+    headers: { Authorization: `Bearer ${process.env.IAUC_API_KEY}` },
   });
-  return res.data.items; // 実際の API 返却形式に合わせて調整を
+  const rawItems = response.data.items || [];
+  return rawItems.map(item => ({
+    title: item.item_title,
+    price: item.price,
+    km: item.km,
+    imageUrl: item.img_url,
+    url: item.url,
+  }));
 }
+// 63行目（ここまで）
 
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') return;
