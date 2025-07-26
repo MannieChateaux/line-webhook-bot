@@ -85,66 +85,66 @@ async function handleEvent(event) {
     const next = FIELDS[session.step];
     return client.replyMessage(token, { type:'text', text: QUESTIONS[next] });
   }
-// ─── 終了メッセージ ────────────────────
-await client.replyMessage(token, {
-  type: 'text',
-  text: '✅ 条件が揃いました。検索結果を取得中…少々お待ちください！'
-});
+ 
+  // —— 終了メッセージ —————————
++ await client.replyMessage(token, {
++   type: 'text',
++   text: '✅ 条件が揃いました。検索結果を取得中…少々お待ちください！'
++ });
 
-  // — IAuc 実データ取得 ——————————
-  const results = await fetchIaucResults(session.data);
++ // —— IAuc 実データ取得 —————————
++ const results = await fetchIaucResults(session.data);
 
-  // — Flex メッセージ用バブル生成 ——————————
-  const bubbles = results.slice(0, 5).map(item => ({
-    type: 'bubble',
-    hero: {
-      type: 'image',
-      url: item.imageUrl || 'https://via.placeholder.com/240',
-      size: 'full',
-      aspectRatio: '1:1',
-      aspectMode: 'cover',
-    },
-    body: {
-      type: 'box',
-      layout: 'vertical',
-      contents: [
-        { type: 'text', text: item.title, weight: 'bold', size: 'md' },
-        { type: 'text', text: item.price, margin: 'sm' },
-        { type: 'text', text: item.km, margin: 'sm' },
-      ],
-    },
-    footer: {
-      type: 'box',
-      layout: 'vertical',
-      spacing: 'sm',
-      contents: [
-        {
-          type: 'button',
-          style: 'link',
-          height: 'sm',
-          action: {
-            type: 'uri',
-            label: '詳細を見る',
-            uri: item.url,
-          },
-        },
-      ],
-    },
-  }));
++ // —— Flex メッセージ用バブル生成 —————————
++ const bubbles = results.slice(0,5).map(item => ({
++   type: 'bubble',
++   hero: {
++     type: 'image',
++     url: item.imageUrl || 'https://via.placeholder.com/240',
++     size: 'full',
++     aspectRatio: '1:1',
++     aspectMode: 'cover',
++   },
++   body: {
++     type: 'box',
++     layout: 'vertical',
++     contents: [
++       { type: 'text', text: item.title, weight: 'bold', size: 'md' },
++       { type: 'text', text: `${item.price}円以下`, margin: 'sm' },
++       { type: 'text', text: `${item.km}km以下`, margin: 'sm' },
++     ],
++   },
++   footer: {
++     type: 'box',
++     layout: 'vertical',
++     spacing: 'sm',
++     contents: [
++       {
++         type: 'button',
++         style: 'link',
++         height: 'sm',
++         action: {
++           type: 'uri',
++           label: '詳細を見る',
++           uri: item.url,
++         },
++       },
++     ],
++   },
++ }));
 
-  // — Flex メッセージで検索結果を返信 ——————————
-  await client.replyMessage(token, {
-    type: 'flex',
-    altText: 'IAuc 検索結果はこちらです',
-    contents: {
-      type: 'carousel',
-      contents: bubbles
-    }
-  });
++ // —— Flex メッセージで検索結果を返信 —————————
++ await client.replyMessage(token, {
++   type: 'flex',
++   altText: 'IAuc 検索結果はこちらです',
++   contents: {
++     type: 'carousel',
++     contents: bubbles,
++   },
++ });
 
-  // — 会話セッションをクリア ——————————
+  // —— 会話セッションをクリア —————————
   sessions.delete(uid);
-}
 
 // エラー時も 200 応答
 app.use((err, req, res, next) => {
