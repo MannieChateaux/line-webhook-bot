@@ -131,19 +131,20 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
    },
  }));
  
-  // —— Flex メッセージで検索結果を返信 —————————
- await client.replyMessage(token, {
-   type: 'flex',
-   altText: 'IAuc 検索結果はこちらです',
-   contents: {
-     type: 'carousel',
-     contents: bubbles,
-   },
- });
+// — Flex メッセージで検索結果を返信 —
+await client.replyMessage(token, {
+  type: 'flex',
+  altText: 'IAuc 検索結果はこちらです',
+  contents: {
+    type: 'carousel',
+    contents: bubbles
+  }
+});
 
-  // —— 会話セッションをクリア —————————
-  sessions.delete(uid);
-}
+// — 会話セッションをクリア —
+sessions.delete(uid);
+}  // ← ここが handleEvent の終わりの「}」
+
 
 // エラー時も 200 応答
 app.use((err, req, res, next) => {
