@@ -141,7 +141,6 @@ app.use((err, req, res, next) => {
   console.error(err);
   res.sendStatus(200);
 });
-}  // ← ここが handleEvent の終わりの「}」
 
 // 起動
 const PORT = process.env.PORT || 3000;
