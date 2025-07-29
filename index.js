@@ -46,6 +46,82 @@ app.post(
 );
 
 
+// — IAuc 実データ取得関数 (ヘッドレススクレイピング) —
+async function fetchIaucResults({ maker, model, budget, mileage }) {
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  const page = await browser.newPage();
+
+  // 1) ログインページへ
+  await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
+
+  // 2) ID/PW 入力→ログイン
+  await page.type('#userid', process.env.IAUC_USER_ID);
+  await page.type('#password', process.env.IAUC_PASSWORD);
+  await Promise.all([
+    page.click('input[type=submit]'),
+    page.waitForNavigation({ waitUntil: 'networkidle2' })
+  ]);
+
+  // 3) 検索フォームに値をセット
+  await page.select('select[name=maker]', maker);
+  await page.select('select[name=model]', model);
+  await page.type('input[name=budget]', budget);
+  await page.type('input[name=mileage]', mileage);
+
+  // 4) 検索実行
+  await Promise.all([
+    page.click('button#searchButton'),
+    page.waitForNavigation({ waitUntil: 'networkidle2' })
+  ]);
+
+  // 5) 結果をスクレイピング
+  const items = await page.$$eval('.result-item', cards =>
+    cards.map(card => {
+      const title    = card.querySelector('.item-title')?.textContent.trim() || '';
+      const price    = card.querySelector('.item-price')?.textContent.trim() || '';
+      const km       = card.querySelector('.item-km')?.textContent.trim() || '';
+      const imageUrl = card.querySelector('img')?.src                   || '';
+      const url      = card.querySelector('a.details')?.href            || '';
+      return { title, price, km, imageUrl, url };
+    })
+  );
+
+  await browser.close();
+  return items;
+}
+
+async function handleEvent(event) {
+  if (event.type !== 'message' || event.message.type !== 'text') return;
+
+  const uid   = event.source.userId;
+  const text  = event.message.text.trim();
+  const token = event.replyToken;
+
+  // 初回質問
+  if (!sessions.has(uid)) {
+    sessions.set(uid, { step: 0, data: {} });
+    return client.replyMessage(token, { type:'text', text: QUESTIONS.maker });
+  }
+
+  // 回答保存＆次へ
+  const session = sessions.get(uid);
+  const field   = FIELDS[session.step];
+  session.data[field] = text;
+  session.step++;
+
+  if (session.step < FIELDS.length) {
+    const next = FIELDS[session.step];
+    return client.replyMessage(token, { type:'text', text: QUESTIONS[next] });
+  }
+ 
+  // —— 終了メッセージ —————————
+ await client.replyMessage(token, {
+   type: 'text',
+   text: '✅ 条件が揃いました。検索結果を取得中…少々お待ちください！'
+ });
+
 // ―― IAuc 実データ取得関数 ―――
 async function fetchIaucResults({ maker, model, budget, mileage }) {
   // Puppeteer をヘッドレスモードで起動
@@ -130,11 +206,20 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
      ],
    },
  }));
+ 
+  // —— Flex メッセージで検索結果を返信 —————————
+ await client.replyMessage(token, {
+   type: 'flex',
+   altText: 'IAuc 検索結果はこちらです',
+   contents: {
+     type: 'carousel',
+     contents: bubbles,
+   },
+ });
 
-
-// — 会話セッションをクリア —
-sessions.delete(uid);
-} 
+  // —— 会話セッションをクリア —————————
+  sessions.delete(uid);
+}
 
 // エラー時も 200 応答
 app.use((err, req, res, next) => {
