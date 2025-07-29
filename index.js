@@ -134,7 +134,7 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
 
 // — 会話セッションをクリア —
 sessions.delete(uid);
-
+} 
 
 // エラー時も 200 応答
 app.use((err, req, res, next) => {
