@@ -57,8 +57,8 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
   await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
 
   // 2) ID/PW 入力→ログイン
-  await page.type('#userid', process.env.W727511);
-  await page.type('#password', process.env.DR1VEME1NSANE);
+ await page.type('#userid',   process.env.IAUC_USER_ID);
+await page.type('#password', process.env.IAUC_PASSWORD);
   await Promise.all([
     page.click('input[type=submit]'),
     page.waitForNavigation({ waitUntil: 'networkidle2' })
