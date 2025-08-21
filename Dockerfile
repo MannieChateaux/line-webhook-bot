@@ -5,7 +5,7 @@ WORKDIR /app
 
 # 依存をクリーンに入れる
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 # アプリ本体
 COPY . .
