@@ -80,7 +80,11 @@ const results = await fetchIaucResults(session.data);
 
 // --- IAuc 実データ取得関数（この1つだけ残す）---
 async function fetchIaucResults({ maker, model, budget, mileage }) {
- const browser = await puppeteer.launch({
+// 84行の直前に追加（実際の行番号は前後OK）
+const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath();
+console.log('Using Chrome at:', execPath);
+
+const browser = await puppeteer.launch({
   headless: 'new',
   args: [
     '--no-sandbox',
@@ -89,15 +93,12 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
     '--disable-gpu',
     '--no-zygote',
   ],
-  // 環境変数があれば使う／無ければ Puppeteer が落とした Chromium を使う
-  executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
+  executablePath: execPath,
 });
 
-  const page = await browser.newPage();
-
-  // ← ここで page のタイムアウトを設定（launchオプションではない）
-  page.setDefaultNavigationTimeout(60000);
-  page.setDefaultTimeout(60000);
+const page = await browser.newPage();
+page.setDefaultNavigationTimeout(60000);
+page.setDefaultTimeout(60000);
 
   await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
 
@@ -125,6 +126,8 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
     page.click('button#searchButton'),
     page.waitForNavigation({ waitUntil: 'networkidle2' }),
   ]);
+
+  await page.waitForSelector('.result-item', { timeout: 30000 }).catch(() => {});
 
   const items = await page.$$eval('.result-item', cards =>
     cards.map(card => ({
