@@ -80,11 +80,18 @@ const results = await fetchIaucResults(session.data);
 
 // --- IAuc 実データ取得関数（この1つだけ残す）---
 async function fetchIaucResults({ maker, model, budget, mileage }) {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH, // Renderで設定済み
-  });
+ const browser = await puppeteer.launch({
+  headless: 'new',
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--no-zygote',
+  ],
+  // 環境変数があれば使う／無ければ Puppeteer が落とした Chromium を使う
+  executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
+});
 
   const page = await browser.newPage();
 
