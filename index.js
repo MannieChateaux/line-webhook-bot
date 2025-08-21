@@ -36,18 +36,17 @@ const QUESTIONS = {
 // 2) Webhook 受け口：署名検証→ハンドラ
 app.post(
   '/webhook',
-  // signature middleware に rawBody を渡す
-  (req, res, next) => middleware({ 
-    channelSecret: config.channelSecret, 
-    payload: req.rawBody 
+  (req, res, next) => middleware({
+    channelSecret: config.channelSecret,
+    payload: req.rawBody,
   })(req, res, next),
   async (req, res) => {
-    // この時点で req.body はパース済み
-  const events = req.body.events;
-// ここで待たない：すぐ 200 を返す
-events.forEach(e => handleEvent(e).catch(console.error));
-res.sendStatus(200);
-}
+    const events = req.body.events;
+    // 先に 200 を返す（重要）
+    res.sendStatus(200);
+    // 後処理は非同期で流す
+    for (const e of events) handleEvent(e).catch(console.error);
+  }
 );
 
 // <select> を「value」ではなく「表示ラベル」で選ぶ
