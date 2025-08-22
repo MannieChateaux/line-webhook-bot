@@ -15,7 +15,7 @@ RUN npm install --omit=dev --no-audit --no-fund
 COPY . .
 
 # Puppeteer に使わせる Chromium のパスを固定
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
 
 # Render が割り当てる PORT を使う想定（index.js で process.env.PORT を参照）
 EXPOSE 10000
