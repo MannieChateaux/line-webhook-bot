@@ -170,10 +170,54 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
       console.log('ℹ️ ログイン不要です');
     }
 
-    // 3) 検索フォーム待機
+   // 3) 検索フォーム待機の前にHTMLデバッグを追加
     console.log('🔍 検索フォームを待機中...');
-    await page.waitForSelector('select[name=maker], select[name=model], input[name=budget]', { timeout: 20000 });
-    console.log('✅ 検索フォーム発見');
+    
+    // 実際のページのHTMLを調査
+    console.log('🔍 現在のページのHTML構造をデバッグ中...');
+    const pageTitle = await page.title();
+    console.log('📄 ページタイトル:', pageTitle);
+    
+    const currentUrl = page.url();
+    console.log('🌐 現在のURL:', currentUrl);
+    
+    // フォーム関連要素をすべて検索
+    const formElements = await page.evaluate(() => {
+      const selects = Array.from(document.querySelectorAll('select')).map(el => ({
+        tag: 'select',
+        name: el.name,
+        id: el.id,
+        className: el.className
+      }));
+      
+      const inputs = Array.from(document.querySelectorAll('input')).map(el => ({
+        tag: 'input',
+        type: el.type,
+        name: el.name,
+        id: el.id,
+        className: el.className
+      }));
+      
+      const buttons = Array.from(document.querySelectorAll('button')).map(el => ({
+        tag: 'button',
+        type: el.type,
+        name: el.name,
+        id: el.id,
+        className: el.className,
+        text: el.textContent?.trim()
+      }));
+      
+      return { selects, inputs, buttons };
+    });
+    
+    console.log('🎯 発見した要素:');
+    console.log('📝 SELECT要素:', JSON.stringify(formElements.selects, null, 2));
+    console.log('📝 INPUT要素:', JSON.stringify(formElements.inputs, null, 2));
+    console.log('📝 BUTTON要素:', JSON.stringify(formElements.buttons, null, 2));
+    
+    // 元の待機処理は一旦コメントアウトしてデバッグを優先
+    // await page.waitForSelector('select[name=maker], select[name=model], input[name=budget]', { timeout: 20000 });
+    console.log('✅ デバッグ情報取得完了');
 
     // 4) 条件入力（メーカー/車種はラベル選択、数値は正規化）
     console.log('📊 検索条件を入力中...');
