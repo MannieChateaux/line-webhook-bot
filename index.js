@@ -140,7 +140,7 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
     // 2) ログイン必要か判定してログイン
     // 3) ページが完全にロードされるまで待機
     console.log('🔍 ページの完全ロードを待機中...');
-    await page.waitForTimeout(3000); // 3秒待機
+    await page.waitFor(3000); // 3秒待機
     
     // 実際のページのHTML構造を詳細調査
     console.log('🔍 現在のページのHTML構造をデバッグ中...');
@@ -318,7 +318,7 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
     });
     
     // 少し待機してフォームの変更を反映
-    await page.waitForTimeout(1000);
+    await page.waitFor(1000);
 
     // 5) 検索ボタンを動的に検出してクリック
     console.log('🚀 検索ボタンを探して実行中...');
@@ -393,7 +393,7 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
     console.log('📝 検索結果を確認中...');
     
     // ページがロードされるまで少し待機
-    await page.waitForTimeout(2000);
+    await page.waitFor(2000);
     
     // 現在のURL確認
     const resultUrl = page.url();
