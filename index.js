@@ -138,6 +138,109 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
     console.log('✅ ページロード完了');
 
     // 2) ログイン必要か判定してログイン
+    console.log('🔐 ログイン必要性をチェック中...');
+    const needsLogin = await page.$('#userid') || await page.$('input[name=userid]') || 
+                       await page.$('.login-form') || await page.$('#login') ||
+                       page.url().includes('login') || await page.$('input[type="password"]');
+    
+    if (needsLogin || page.url().includes('iauc.co.jp/vehicle/')) {
+      console.log('🔑 ログインが必要です。ログイン処理を開始...');
+      
+      // ログインページに移動（既にログインページにいない場合）
+      if (!page.url().includes('login')) {
+        console.log('🔄 ログインページに移動中...');
+        await page.goto('https://www.iauc.co.jp/login/', { waitUntil: 'domcontentloaded' });
+      }
+      
+      await page.waitForSelector('#userid, input[name=userid], input[name="user"], input[type="text"]', { timeout: 10000 });
+      await page.waitForSelector('#password, input[name=password], input[type="password"]', { timeout: 10000 });
+
+      const uid = process.env.IAUC_USER_ID;
+      const pw  = process.env.IAUC_PASSWORD;
+      
+      if (!uid || !pw) {
+        console.error('❌ IAUC認証情報が設定されていません');
+        throw new Error('IAUC_USER_ID / IAUC_PASSWORD not set');
+      }
+
+      console.log('📝 ログイン情報を入力中...');
+      // 複数のセレクタでユーザーID入力を試行
+      const userSelectors = ['#userid', 'input[name=userid]', 'input[name="user"]', 'input[type="text"]:first-of-type'];
+      for (const selector of userSelectors) {
+        const userField = await page.$(selector);
+        if (userField) {
+          await page.type(selector, uid, { delay: 50 });
+          console.log('✅ ユーザーID入力完了:', selector);
+          break;
+        }
+      }
+
+      // 複数のセレクタでパスワード入力を試行
+      const passSelectors = ['#password', 'input[name=password]', 'input[type="password"]'];
+      for (const selector of passSelectors) {
+        const passField = await page.$(selector);
+        if (passField) {
+          await page.type(selector, pw, { delay: 50 });
+          console.log('✅ パスワード入力完了:', selector);
+          break;
+        }
+      }
+
+      console.log('🚪 ログインボタンをクリック...');
+      // ログインボタンを複数パターンで検索
+      const loginButtonSelectors = [
+        'input[type=submit]', 'button[type=submit]', 'button:contains("ログイン")',
+        '.login-btn', '#login-btn', 'input[value*="ログイン"]', 'button'
+      ];
+      
+      let loginClicked = false;
+      for (const selector of loginButtonSelectors) {
+        try {
+          if (selector.includes(':contains')) {
+            const buttons = await page.$$('button, input[type="submit"]');
+            for (const button of buttons) {
+              const text = await page.evaluate(btn => btn.textContent || btn.value, button);
+              if (text && text.includes('ログイン')) {
+                await button.click();
+                loginClicked = true;
+                console.log('✅ ログインボタンクリック完了（テキストベース）');
+                break;
+              }
+            }
+          } else {
+            const loginBtn = await page.$(selector);
+            if (loginBtn) {
+              await loginBtn.click();
+              loginClicked = true;
+              console.log('✅ ログインボタンクリック完了:', selector);
+              break;
+            }
+          }
+          if (loginClicked) break;
+        } catch (e) {
+          console.log('⚠️ ログインボタンセレクタ失敗:', selector);
+        }
+      }
+
+      if (!loginClicked) {
+        console.log('⚠️ ログインボタンが見つからないため、Enterキーで送信');
+        await page.keyboard.press('Enter');
+      }
+
+      console.log('⏳ ログイン処理完了を待機中...');
+      try {
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        console.log('✅ ログイン完了、検索ページに移動');
+        
+        // 検索ページに移動
+        await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'domcontentloaded' });
+      } catch (navError) {
+        console.log('⚠️ ナビゲーション待機タイムアウト、現在のページで継続');
+      }
+    } else {
+      console.log('ℹ️ ログイン不要です');
+    }
+    
     // 3) ページが完全にロードされるまで待機
     console.log('🔍 ページの完全ロードを待機中...');
     await new Promise(resolve => setTimeout(resolve, 3000)); // 3秒待機
