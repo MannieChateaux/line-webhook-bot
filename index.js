@@ -288,67 +288,57 @@ try {
         await page.keyboard.press('Enter');
       }
 
-     // 修正前（252行目付近）
-console.log('⏳ ログイン処理完了を待機中...');
-try {
-  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-  console.log('✅ ログイン完了、検索ページに移動');
-  
-  // 検索ページに移動
-  await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'domcontentloaded' });
-} catch (navError) {
-  console.log('⚠️ ナビゲーション待機タイムアウト、現在のページで継続');
-}
-
-// 修正後
-console.log('⏳ ログイン処理完了を待機中...');
-try {
-  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-  console.log('✅ ログイン完了');
-  
-  // 現在のURLを確認
-  const currentUrl = page.url();
-  console.log('🌐 ログイン後のURL:', currentUrl);
-  
-  // 検索フォームが利用可能なページを探す
-  const searchPageUrls = [
-    'https://www.iauc.co.jp/search/',
-    'https://www.iauc.co.jp/vehicle/search/',
-    'https://www.iauc.co.jp/member/vehicle/',
-    currentUrl // 現在のページもチェック
-  ];
-  
-  let foundSearchForm = false;
-  for (const url of searchPageUrls) {
-    try {
-      if (url !== currentUrl) {
-        console.log('🔍 検索ページを試行:', url);
-        await page.goto(url, { waitUntil: 'domcontentloaded' });
-        await new Promise(resolve => setTimeout(resolve, 2000));
+     console.log('⏳ ログイン処理完了を待機中...');
+      try {
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+        console.log('✅ ログイン完了');
+        
+        // 現在のURLを確認
+        const currentUrl = page.url();
+        console.log('🌐 ログイン後のURL:', currentUrl);
+        
+        // 検索フォームが利用可能なページを探す
+        const searchPageUrls = [
+          'https://www.iauc.co.jp/search/',
+          'https://www.iauc.co.jp/vehicle/search/',
+          'https://www.iauc.co.jp/member/vehicle/',
+          currentUrl // 現在のページもチェック
+        ];
+        
+        let foundSearchForm = false;
+        for (const url of searchPageUrls) {
+          try {
+            if (url !== currentUrl) {
+              console.log('🔍 検索ページを試行:', url);
+              await page.goto(url, { waitUntil: 'domcontentloaded' });
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+            
+            // 検索フォーム要素の存在確認
+            const hasForm = await page.evaluate(() => {
+              return document.querySelectorAll('select, input[type="text"], input[type="number"]').length > 3;
+            });
+            
+            if (hasForm) {
+              console.log('✅ 検索フォーム発見:', page.url());
+              foundSearchForm = true;
+              break;
+            }
+          } catch (e) {
+            console.log('⚠️ URL試行失敗:', url);
+          }
+        }
+        
+        if (!foundSearchForm) {
+          console.log('⚠️ 適切な検索ページが見つかりません');
+        }
+        
+      } catch (navError) {
+        console.log('⚠️ ナビゲーション待機タイムアウト、現在のページで継続');
       }
-      
-      // 検索フォーム要素の存在確認
-      const hasForm = await page.evaluate(() => {
-        return document.querySelectorAll('select, input[type="text"], input[type="number"]').length > 3;
-      });
-      
-      if (hasForm) {
-        console.log('✅ 検索フォーム発見:', page.url());
-        foundSearchForm = true;
-        break;
-      }
-    } catch (e) {
-      console.log('⚠️ URL試行失敗:', url);
+    } else {
+      console.log('ℹ️ ログイン不要です');
     }
-  }
-  
-  if (!foundSearchForm) {
-    console.log('⚠️ 適切な検索ページが見つかりません');
-  }
-  
-} catch (navError) {
-  console.log('⚠️ ナビゲーション待機タイムアウト、現在のページで継続');
-}
     
     // 3) ページが完全にロードされるまで待機
     console.log('🔍 ページの完全ロードを待機中...');
