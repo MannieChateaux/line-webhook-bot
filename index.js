@@ -146,11 +146,54 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
     if (needsLogin || page.url().includes('iauc.co.jp/vehicle/')) {
       console.log('🔑 ログインが必要です。ログイン処理を開始...');
       
-      // ログインページに移動（既にログインページにいない場合）
-      if (!page.url().includes('login')) {
-        console.log('🔄 ログインページに移動中...');
-        await page.goto('https://www.iauc.co.jp/login/', { waitUntil: 'domcontentloaded' });
+     if (!page.url().includes('login')) {
+  console.log('🔄 ログインページに移動中...');
+  // まずトップページにアクセスしてからログインリンクを探す
+  await page.goto('https://www.iauc.co.jp/', { waitUntil: 'domcontentloaded' });
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  // ログインリンクを探してクリック
+  const loginLinkSelectors = [
+    'a[href*="login"]', 
+    'a[href*="service/login"]',
+    'a:contains("ログイン")',
+    '.login-link',
+    '#login-link'
+  ];
+  
+  let loginFound = false;
+  for (const selector of loginLinkSelectors) {
+    try {
+      if (selector.includes(':contains')) {
+        const links = await page.$$('a');
+        for (const link of links) {
+          const text = await page.evaluate(l => l.textContent, link);
+          if (text && text.includes('ログイン')) {
+            await link.click();
+            loginFound = true;
+            break;
+          }
+        }
+      } else {
+        const loginLink = await page.$(selector);
+        if (loginLink) {
+          await loginLink.click();
+          loginFound = true;
+          break;
+        }
       }
+      if (loginFound) break;
+    } catch (e) {
+      continue;
+    }
+  }
+  
+  if (loginFound) {
+    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 });
+  } else {
+    console.log('⚠️ ログインリンクが見つかりません');
+  }
+}
       
       await page.waitForSelector('#userid, input[name=userid], input[name="user"], input[type="text"]', { timeout: 10000 });
       await page.waitForSelector('#password, input[name=password], input[type="password"]', { timeout: 10000 });
