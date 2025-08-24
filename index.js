@@ -195,8 +195,26 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
   }
 }
       
-      await page.waitForSelector('#userid, input[name=userid], input[name="user"], input[type="text"]', { timeout: 10000 });
-      await page.waitForSelector('#password, input[name=password], input[type="password"]', { timeout: 10000 });
+      try {
+  await page.waitForSelector('#userid, input[name=userid], input[name="user"], input[type="text"]', { timeout: 5000 });
+} catch (e) {
+  console.log('⚠️ ユーザーIDフィールドが見つかりません、ページ構造をデバッグします');
+  const loginElements = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('input')).map(el => ({
+      type: el.type,
+      name: el.name,
+      id: el.id,
+      placeholder: el.placeholder
+    }));
+  });
+  console.log('🔍 ログインページの入力要素:', JSON.stringify(loginElements, null, 2));
+}
+
+try {
+  await page.waitForSelector('#password, input[name=password], input[type="password"]', { timeout: 5000 });
+} catch (e) {
+  console.log('⚠️ パスワードフィールドが見つかりません');
+}
 
       const uid = process.env.IAUC_USER_ID;
       const pw  = process.env.IAUC_PASSWORD;
