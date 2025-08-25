@@ -271,7 +271,6 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
         'input[type="submit"][value*="検索"]',
         'button[type="submit"]',
         'input[type="submit"]',
-        'button:contains("検索")',
         '.search-btn',
         '#search-btn'
       ];
@@ -281,6 +280,17 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
         if (btn) {
           btn.click();
           console.log('✅ 検索ボタンクリック:', selector);
+          return true;
+        }
+      }
+      
+      // テキスト内容で検索（:contains使わない方法）
+      const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+      for (const btn of buttons) {
+        const text = btn.textContent || btn.value || '';
+        if (text.includes('検索')) {
+          btn.click();
+          console.log('✅ 検索ボタンクリック（テキストベース）');
           return true;
         }
       }
