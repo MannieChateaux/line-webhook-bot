@@ -349,8 +349,8 @@ try {
     const pageTitle = await page.title();
     console.log('📄 ページタイトル:', pageTitle);
     
-    const finalurl = page.url();
-    console.log('🌐 現在のURL:', finalurl);
+    const finalUrl = page.url();
+    console.log('🌐 現在のURL:', finalUrl);
     
     // ページ全体のHTMLを一部取得（デバッグ用）
     const bodyHTML = await page.evaluate(() => {
