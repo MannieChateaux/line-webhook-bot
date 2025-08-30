@@ -276,7 +276,7 @@ async function handleEvent(event) {
   if (!sessions.has(uid)) {
     console.log('🆕 新規セッション開始');
     sessions.set(uid, { step: 0, data: {} });
-    return client.replyMessage(token, { type:'text', text: QUESTIONS.maker });
+    return client.replyMessage(token, { type:'text', text: QUESTIONS.keyword });
   }
 
   // 回答保存＆次へ
