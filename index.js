@@ -25,12 +25,9 @@ app.use(express.json({
 
 // セッション保持用
 const sessions = new Map();
-const FIELDS = ['maker','model','budget','mileage'];
+const FIELDS = ['keyword'];
 const QUESTIONS = {
-  maker:   '🚗 メーカーを教えてください（例：トヨタ、スバル）',
-  model:   '🚗 車名を教えてください（例：ヤリス、サンバー）',
-  budget:  '💰 予算を教えてください（例：50万、200万）',
-  mileage: '📏 走行距離上限を教えてください（例：1万km、5万km）',
+  keyword: '検索したい車の情報を教えてください（例：スバル インプレッサ、トヨタ ヤリス 2020）'
 };
 
 // 2) Webhook 受け口：署名検証→ハンドラ
@@ -96,18 +93,14 @@ async function typeIfExists(page, selector, value) {
 }
 
 
-// 修正版: IAuc検索フォーム操作
-async function fetchIaucResults({ maker, model, budget, mileage }) {
-  console.log('🔍 fetchIaucResults開始:', { maker, model, budget, mileage });
+// フリーワード検索でIAucデータ取得
+async function fetchIaucResults({ keyword }) {
+  console.log('フリーワード検索開始:', keyword);
   
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath();
-  console.log('📍 Using Chrome at:', execPath);
-
-  let browser;
-  let page;
+  let browser, page;
   
   try {
-    console.log('🚀 Puppeteerブラウザ起動中...');
     browser = await puppeteer.launch({
       headless: 'new',
       args: [
@@ -120,272 +113,132 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
       executablePath: execPath,
     });
 
-    console.log('📄 新しいページを作成中...');
     page = await browser.newPage();
     page.setDefaultNavigationTimeout(60000);
     page.setDefaultTimeout(60000);
 
-    // 実ブラウザっぽい UA・日本語優先
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
     );
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP,ja;q=0.9' });
     await page.setViewport({ width: 1280, height: 800 });
 
-    // 1) ログインページへ
-    console.log('🌐 IAucサイトにアクセス中...');
+    // ログイン処理
+    console.log('IAucサイトにアクセス中...');
     await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'domcontentloaded' });
-    console.log('✅ ページロード完了');
 
-    // 2) ログイン処理（既存のログインコードをそのまま使用）
     const needsLogin = await page.$('#userid') || await page.$('input[name=userid]');
     
     if (needsLogin) {
-      console.log('🔑 ログイン処理を実行...');
+      console.log('ログイン処理中...');
       const uid = process.env.IAUC_USER_ID;
-      const pw  = process.env.IAUC_PASSWORD;
+      const pw = process.env.IAUC_PASSWORD;
       
       if (!uid || !pw) {
-        throw new Error('IAUC_USER_ID / IAUC_PASSWORD not set');
+        throw new Error('IAUC認証情報が設定されていません');
       }
 
-      // ログイン実行
-      const userSelectors = ['#userid', 'input[name=userid]', 'input[name="user"]', 'input[type="text"]:first-of-type'];
+      const userSelectors = ['#userid', 'input[name=userid]', 'input[name="user"]'];
       for (const selector of userSelectors) {
-        const userField = await page.$(selector);
-        if (userField) {
+        if (await page.$(selector)) {
           await page.type(selector, uid, { delay: 50 });
-          console.log('✅ ユーザーID入力完了');
           break;
         }
       }
 
       const passSelectors = ['#password', 'input[name=password]', 'input[type="password"]'];
       for (const selector of passSelectors) {
-        const passField = await page.$(selector);
-        if (passField) {
+        if (await page.$(selector)) {
           await page.type(selector, pw, { delay: 50 });
-          console.log('✅ パスワード入力完了');
           break;
         }
       }
 
-      // ログインボタンクリック
       const loginButton = await page.$('input[type=submit], button[type=submit]');
       if (loginButton) {
         await loginButton.click();
         await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-        console.log('✅ ログイン完了');
+        console.log('ログイン完了');
       }
     }
 
-    // 3) 検索ページが表示されるまで待機
+    // 会場選択
+    console.log('会場選択中...');
     await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'domcontentloaded' });
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await new Promise(resolve => setTimeout(resolve, 2000));
     
-    console.log('🔍 検索フォーム操作開始...');
-
-    // 4) 修正版: チェックボックス形式での検索条件設定
-    await page.evaluate(({ maker, model, budget, mileage }) => {
-      console.log('🎯 検索条件設定:', { maker, model, budget, mileage });
-      
-      // メーカー選択（チェックボックス）
-      if (maker) {
-        const makerCheckboxes = document.querySelectorAll('input[name="maker[]"]');
-        const makerLabels = document.querySelectorAll('.search-maker-checkbox');
-        
-        // ラベルのテキストからメーカーを探す
-        for (let i = 0; i < makerLabels.length; i++) {
-          const label = makerLabels[i];
-          if (label.textContent && label.textContent.includes(maker)) {
-            const checkbox = makerCheckboxes[i];
-            if (checkbox && !checkbox.checked) {
-              checkbox.click();
-              console.log('✅ メーカー選択:', maker);
-              break;
-            }
-          }
-        }
-        
-        // 代替方法：li要素からテキストで検索
-        const makerLIs = document.querySelectorAll('li.drag_label.search-maker-checkbox');
-        for (const li of makerLIs) {
-          if (li.textContent && li.textContent.includes(maker)) {
-            const checkbox = li.querySelector('input[type="checkbox"]');
-            if (checkbox && !checkbox.checked) {
-              checkbox.click();
-              console.log('✅ メーカー選択（li経由）:', maker);
-              break;
-            }
-          }
-        }
-      }
-      
-      // 少し待機してから車種選択
-      setTimeout(() => {
-        if (model) {
-          // 車種選択（メーカー選択後に表示される可能性）
-          const allCheckboxes = document.querySelectorAll('input[type="checkbox"]');
-          const allLabels = document.querySelectorAll('li');
-          
-          for (const label of allLabels) {
-            if (label.textContent && label.textContent.includes(model)) {
-              const checkbox = label.querySelector('input[type="checkbox"]');
-              if (checkbox && !checkbox.checked) {
-                checkbox.click();
-                console.log('✅ 車種選択:', model);
-                break;
-              }
-            }
-          }
-        }
-        
-        // 予算・走行距離設定（もし入力欄があれば）
-        const budgetInput = document.querySelector('input[name*="price"], input[name*="budget"]');
-        if (budgetInput && budget) {
-          const budgetNum = budget.replace(/[^\d]/g, '') + '0000'; // 万→円変換
-          budgetInput.value = budgetNum;
-          budgetInput.dispatchEvent(new Event('input', { bubbles: true }));
-          console.log('✅ 予算設定:', budgetNum);
-        }
-        
-        const mileageInput = document.querySelector('input[name*="mileage"], input[name*="distance"]');
-        if (mileageInput && mileage) {
-          const mileageNum = mileage.replace(/[^\d]/g, '') + '0000'; // 万km→km変換
-          mileageInput.value = mileageNum;
-          mileageInput.dispatchEvent(new Event('input', { bubbles: true }));
-          console.log('✅ 走行距離設定:', mileageNum);
-        }
-      }, 1000);
-      
-    }, { maker, model, budget, mileage });
-
-    // 5) 検索実行
-    console.log('🚀 検索実行中...');
-    await new Promise(resolve => setTimeout(resolve, 2000)); // 設定完了を待機
+    await page.click('#btn_vehicle_everyday_all_ja-tm90');
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
-    // 検索ボタンをクリック
-    const searchExecuted = await page.evaluate(() => {
-      // 検索ボタンを複数パターンで探す
-      const searchSelectors = [
-        'input[type="submit"][value*="検索"]',
-        'button[type="submit"]',
-        'input[type="submit"]',
-        '.search-btn',
-        '#search-btn'
-      ];
-      
-      for (const selector of searchSelectors) {
-        const btn = document.querySelector(selector);
-        if (btn) {
-          btn.click();
-          console.log('✅ 検索ボタンクリック:', selector);
-          return true;
-        }
-      }
-      
-      // テキスト内容で検索（:contains使わない方法）
-      const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-      for (const btn of buttons) {
-        const text = btn.textContent || btn.value || '';
-        if (text.includes('検索')) {
-          btn.click();
-          console.log('✅ 検索ボタンクリック（テキストベース）');
-          return true;
-        }
-      }
-      
-      // フォーム送信を直接実行
-      const form = document.querySelector('#exhibit_search');
-      if (form) {
-        form.submit();
-        console.log('✅ フォーム直接送信');
-        return true;
-      }
-      
-      return false;
-    });
+    await page.click('#btn_vehicle_day_all');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    await page.click('button.page-next-button.col-md-2.col-xs-4');
+    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 });
 
-    if (!searchExecuted) {
-      console.log('⚠️ 検索ボタンが見つからないため、Enterキーで送信');
+    // フリーワード検索
+    console.log('フリーワード検索実行中...');
+    await page.click('#button_freeword_search');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    await page.type('input[name="freeword_search"]', keyword, { delay: 100 });
+
+    const searchButton = await page.$('button[type="submit"], input[value="検索"]');
+    if (searchButton) {
+      await searchButton.click();
+    } else {
       await page.keyboard.press('Enter');
     }
 
-    // 6) 検索結果待機
-    console.log('⏳ 検索結果を待機中...');
     try {
       await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-      console.log('✅ 検索結果ページに移動');
     } catch (e) {
-      console.log('⚠️ ナビゲーション待機タイムアウト、現在ページで継続');
+      console.log('ナビゲーション待機タイムアウト');
     }
 
-    // 7) 検索結果のスクレイピング
     await new Promise(resolve => setTimeout(resolve, 3000));
-    
+
+    // 結果スクレイピング
     const items = await page.evaluate(() => {
-      // 結果要素を探す
-      const selectors = [
-        '.vehicle-item',
-        '.car-item', 
-        '.search-result-item',
-        '.result-item',
-        'tr[class*="result"]',
-        'li[class*="vehicle"]',
-        '.list-item'
-      ];
-      
-      let cards = [];
-      for (const selector of selectors) {
-        cards = Array.from(document.querySelectorAll(selector));
-        if (cards.length > 0) {
-          console.log(`✅ 結果要素発見: ${selector} (${cards.length}件)`);
-          break;
+      const rows = Array.from(document.querySelectorAll('tbody tr'));
+      if (rows.length <= 1) return [];
+
+      return rows.slice(1, 11).map((row, index) => {
+        const cells = row.querySelectorAll('td');
+        let title = '', price = '', km = '', imageUrl = '', url = '';
+        
+        for (const cell of cells) {
+          const text = cell.textContent?.trim() || '';
+          const img = cell.querySelector('img');
+          const link = cell.querySelector('a');
+          
+          if (text.match(/\w+/) && text.length > 3 && !title) {
+            title = text;
+          }
+          if (text.includes('万円') || text.includes('円')) {
+            price = text;
+          }
+          if (text.includes('km') && text.match(/\d/)) {
+            km = text;
+          }
+          if (img && !imageUrl) {
+            imageUrl = img.src;
+          }
+          if (link && !url) {
+            url = link.href;
+          }
         }
-      }
-      
-      if (cards.length === 0) {
-        console.log('❌ 検索結果要素が見つかりません');
-        return [];
-      }
-
-      return cards.slice(0, 10).map((card, index) => {
-        const getText = (selectors) => {
-          for (const s of selectors) {
-            const el = card.querySelector(s);
-            if (el && el.textContent) return el.textContent.trim();
-          }
-          return '';
+        
+        return {
+          title: title || `車両 ${index + 1}`,
+          price: price || '価格情報なし',
+          km: km || '走行距離情報なし',
+          imageUrl: imageUrl || '',
+          url: url || ''
         };
-        
-        const getAttr = (selectors, attr) => {
-          for (const s of selectors) {
-            const el = card.querySelector(s);
-            if (el && el.getAttribute(attr)) return el.getAttribute(attr);
-          }
-          return '';
-        };
-
-        const title = getText([
-          '.title', '.name', '.vehicle-name', '.car-name', 'h1', 'h2', 'h3', 'strong'
-        ]) || `車両 ${index + 1}`;
-        
-        const price = getText([
-          '.price', '.cost', '.amount', '*[class*="price"]'
-        ]) || '価格情報なし';
-        
-        const km = getText([
-          '.mileage', '.distance', '.km', '*[class*="mileage"]'
-        ]) || '走行距離情報なし';
-        
-        const imageUrl = getAttr(['img'], 'src');
-        const url = getAttr(['a'], 'href');
-
-        return { title, price, km, imageUrl, url };
       });
     });
 
-    // 相対URL → 絶対URL変換
     for (const item of items) {
       if (item.url && item.url.startsWith('/')) {
         item.url = 'https://www.iauc.co.jp' + item.url;
@@ -395,11 +248,11 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
       }
     }
 
-    console.log('✅ fetchIaucResults完了:', items.length, '件');
+    console.log('検索完了:', items.length, '件');
     return items;
 
   } catch (error) {
-    console.error('❌ fetchIaucResults エラー:', error);
+    console.error('検索エラー:', error);
     throw error;
   } finally {
     if (page) await page.close().catch(console.error);
@@ -429,16 +282,10 @@ async function handleEvent(event) {
   // 回答保存＆次へ
   const session = sessions.get(uid);
   const field   = FIELDS[session.step];
-  session.data[field] = text;
+  session.data.keyword = text;
   session.step++;
 
   console.log('💾 セッション更新:', session);
-
-  if (session.step < FIELDS.length) {
-    const next = FIELDS[session.step];
-    console.log('❓ 次の質問:', QUESTIONS[next]);
-    return client.replyMessage(token, { type:'text', text: QUESTIONS[next] });
-  }
  
   // 終了メッセージ
   console.log('🔍 検索開始 - 収集した条件:', session.data);
