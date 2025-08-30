@@ -167,7 +167,7 @@ async function fetchIaucResults({ keyword }) {
     await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'domcontentloaded' });
     await new Promise(resolve => setTimeout(resolve, 2000));
     
-    await page.click('#btn_vehicle_everyday_all_ja-tm90');
+    await page.click('#btn_vehicle_everyday_all');
     await new Promise(resolve => setTimeout(resolve, 1000));
     
     await page.click('#btn_vehicle_day_all');
