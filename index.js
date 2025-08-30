@@ -162,41 +162,52 @@ async function fetchIaucResults({ keyword }) {
       }
     }
 
-    // 会場選択
-    console.log('会場選択中...');
-    await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'domcontentloaded' });
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    await page.click('#btn_vehicle_everyday_all');
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    await page.click('#btn_vehicle_day_all');
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    await page.click('button.page-next-button.col-md-2.col-xs-4');
-    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 });
+   // 会場選択
+console.log('会場選択中...');
+await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
 
-    // フリーワード検索
-    console.log('フリーワード検索実行中...');
-    await page.click('#button_freeword_search');
-    await new Promise(resolve => setTimeout(resolve, 1000));
+// 出現まで待ってから安全にクリックするヘルパ
+async function safeClick(sel, timeout = 45000) {
+  await page.waitForSelector(sel, { visible: true, timeout });
+  try {
+    await page.click(sel, { delay: 30 });
+  } catch (_) {
+    await page.$eval(sel, el => el.click());
+  }
+  await page.waitForTimeout(400);
+}
 
-    await page.type('input[name="freeword_search"]', keyword, { delay: 100 });
+await safeClick('#btn_vehicle_everyday_all'); // 共有在庫の全選択
+await safeClick('#btn_vehicle_day_all');      // オークション&入札会の全選択
 
-    const searchButton = await page.$('button[type="submit"], input[value="検索"]');
-    if (searchButton) {
-      await searchButton.click();
-    } else {
-      await page.keyboard.press('Enter');
-    }
+await safeClick('button.page-next-button.col-md-2.col-xs-4'); // 次へ
+await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
 
-    try {
-      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-    } catch (e) {
-      console.log('ナビゲーション待機タイムアウト');
-    }
+// フリーワード検索
+console.log('フリーワード検索実行中...');
+await safeClick('#button_freeword_search');
 
-    await new Promise(resolve => setTimeout(resolve, 3000));
+const freewordInputSel = 'input[name="freeword_search"], input[name="freeword"]';
+await page.waitForSelector(freewordInputSel, { visible: true, timeout: 20000 });
+await page.click(freewordInputSel);
+await page.keyboard.type(keyword, { delay: 30 });
+
+const searchBtnSel = 'button[type="submit"], input[value="検索"], button[name="search"], #button_freeword_submit';
+const searchBtn = await page.$(searchBtnSel);
+if (searchBtn) {
+  await searchBtn.click();
+} else {
+  await page.keyboard.press('Enter');
+}
+
+try {
+  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
+} catch {
+  console.log('ナビゲーション待機タイムアウト（続行）');
+}
+
+await page.waitForTimeout(1500);
+
 
     // 結果スクレイピング
     const items = await page.evaluate(() => {
