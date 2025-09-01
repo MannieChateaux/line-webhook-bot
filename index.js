@@ -220,21 +220,6 @@ try {
   console.log('ナビゲーション待機タイムアウト（続行）');
 }
 
-await new Promise(resolve => setTimeout(resolve, 2000));
-
-// 次へボタンをクリック（ピンクの次へボタン）
-console.log('検索実行中...');
-const searchNextBtnSelector = 'button.page-next-button.col-lg-2.col-md-2.col-sm-4.col-xs-4';
-await page.waitForSelector(searchNextBtnSelector, { visible: true, timeout: 30000 });
-await page.click(searchNextBtnSelector);
-
-console.log('検索結果ページへ遷移中...');
-try {
-  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
-} catch {
-  console.log('ナビゲーション待機タイムアウト（続行）');
-}
-
 await page.waitForTimeout(2000);
 
 
