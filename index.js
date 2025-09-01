@@ -165,21 +165,21 @@ async function fetchIaucResults({ keyword }) {
 // 会場選択
 console.log('会場選択中...');
 await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
-await page.waitForTimeout(2000); // ページの完全読み込みを待つ
+await new Promise(resolve => setTimeout(resolve, 2000)); // ページの完全読み込みを待つ
 
 // 共有在庫&一発落札の全選択（緑のボタン）
 console.log('共有在庫の全選択中...');
 const greenBtnSelector = 'a#btn_vehicle_everyday_all, button#btn_vehicle_everyday_all';
 await page.waitForSelector(greenBtnSelector, { visible: true, timeout: 30000 });
 await page.click(greenBtnSelector);
-await page.waitForTimeout(1000);
+await new Promise(resolve => setTimeout(resolve, 1000));
 
 // オークション&入札会の全選択（青のボタン）
 console.log('オークション&入札会の全選択中...');
 const blueBtnSelector = 'a#btn_vehicle_day_all, button#btn_vehicle_day_all';
 await page.waitForSelector(blueBtnSelector, { visible: true, timeout: 30000 });
 await page.click(blueBtnSelector);
-await page.waitForTimeout(1000);
+await new Promise(resolve => setTimeout(resolve, 1000));
 
 // 次へボタン（ピンクのボタン）
 console.log('次へボタンをクリック中...');
@@ -195,7 +195,7 @@ console.log('フリーワード検索実行中...');
 const freewordTabSelector = 'a#button_freeword_search, button#button_freeword_search';
 await page.waitForSelector(freewordTabSelector, { visible: true, timeout: 30000 });
 await page.click(freewordTabSelector);
-await page.waitForTimeout(1500);
+await new Promise(resolve => setTimeout(resolve, 1500));
 
 // フリーワード入力欄を探して入力
 console.log('キーワード入力中:', keyword);
@@ -206,6 +206,21 @@ await page.evaluate((selector) => {
   document.querySelector(selector).value = '';
 }, freewordInputSelector);
 await page.type(freewordInputSelector, keyword, { delay: 50 });
+
+// 次へボタンをクリック（ピンクの次へボタン）
+console.log('検索実行中...');
+const searchNextBtnSelector = 'button.page-next-button.col-lg-2.col-md-2.col-sm-4.col-xs-4';
+await page.waitForSelector(searchNextBtnSelector, { visible: true, timeout: 30000 });
+await page.click(searchNextBtnSelector);
+
+console.log('検索結果ページへ遷移中...');
+try {
+  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
+} catch {
+  console.log('ナビゲーション待機タイムアウト（続行）');
+}
+
+await new Promise(resolve => setTimeout(resolve, 2000));
 
 // 次へボタンをクリック（ピンクの次へボタン）
 console.log('検索実行中...');
