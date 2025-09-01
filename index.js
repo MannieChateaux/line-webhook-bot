@@ -162,105 +162,153 @@ async function fetchIaucResults({ keyword }) {
       }
     }
 
-   // 会場選択
+// 会場選択
 console.log('会場選択中...');
 await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
+await page.waitForTimeout(2000); // ページの完全読み込みを待つ
 
-// 出現まで待ってから安全にクリックするヘルパ
-async function safeClick(sel, timeout = 45000) {
-  await page.waitForSelector(sel, { visible: true, timeout });
-  try {
-    await page.click(sel, { delay: 30 });
-  } catch (_) {
-    await page.$eval(sel, el => el.click());
-  }
-  await page.waitForTimeout(400);
-}
+// 共有在庫&一発落札の全選択（緑のボタン）
+console.log('共有在庫の全選択中...');
+const greenBtnSelector = 'a#btn_vehicle_everyday_all, button#btn_vehicle_everyday_all';
+await page.waitForSelector(greenBtnSelector, { visible: true, timeout: 30000 });
+await page.click(greenBtnSelector);
+await page.waitForTimeout(1000);
 
-await safeClick('#btn_vehicle_everyday_all'); // 共有在庫の全選択
-await safeClick('#btn_vehicle_day_all');      // オークション&入札会の全選択
+// オークション&入札会の全選択（青のボタン）
+console.log('オークション&入札会の全選択中...');
+const blueBtnSelector = 'a#btn_vehicle_day_all, button#btn_vehicle_day_all';
+await page.waitForSelector(blueBtnSelector, { visible: true, timeout: 30000 });
+await page.click(blueBtnSelector);
+await page.waitForTimeout(1000);
 
-await safeClick('button.page-next-button.col-md-2.col-xs-4'); // 次へ
+// 次へボタン（ピンクのボタン）
+console.log('次へボタンをクリック中...');
+const nextBtnSelector = 'button.page-next-button.col-md-2.col-xs-4';
+await page.waitForSelector(nextBtnSelector, { visible: true, timeout: 30000 });
+await page.click(nextBtnSelector);
 await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
 
 // フリーワード検索
 console.log('フリーワード検索実行中...');
-await safeClick('#button_freeword_search');
 
-const freewordInputSel = 'input[name="freeword_search"], input[name="freeword"]';
-await page.waitForSelector(freewordInputSel, { visible: true, timeout: 20000 });
-await page.click(freewordInputSel);
-await page.keyboard.type(keyword, { delay: 30 });
+// フリーワード検索タブをクリック
+const freewordTabSelector = 'a#button_freeword_search, button#button_freeword_search';
+await page.waitForSelector(freewordTabSelector, { visible: true, timeout: 30000 });
+await page.click(freewordTabSelector);
+await page.waitForTimeout(1500);
 
-const searchBtnSel = 'button[type="submit"], input[value="検索"], button[name="search"], #button_freeword_submit';
-const searchBtn = await page.$(searchBtnSel);
-if (searchBtn) {
-  await searchBtn.click();
-} else {
-  await page.keyboard.press('Enter');
-}
+// フリーワード入力欄を探して入力
+console.log('キーワード入力中:', keyword);
+const freewordInputSelector = 'input#freewordForm\\.freeword-search-input';
+await page.waitForSelector(freewordInputSelector, { visible: true, timeout: 30000 });
+await page.click(freewordInputSelector);
+await page.evaluate((selector) => {
+  document.querySelector(selector).value = '';
+}, freewordInputSelector);
+await page.type(freewordInputSelector, keyword, { delay: 50 });
 
+// 次へボタンをクリック（ピンクの次へボタン）
+console.log('検索実行中...');
+const searchNextBtnSelector = 'button.page-next-button.col-lg-2.col-md-2.col-sm-4.col-xs-4';
+await page.waitForSelector(searchNextBtnSelector, { visible: true, timeout: 30000 });
+await page.click(searchNextBtnSelector);
+
+console.log('検索結果ページへ遷移中...');
 try {
   await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
 } catch {
   console.log('ナビゲーション待機タイムアウト（続行）');
 }
 
-await page.waitForTimeout(1500);
+await page.waitForTimeout(2000);
 
 
-    // 結果スクレイピング
+   // 結果スクレイピング - より詳細な情報取得
+    console.log('検索結果をスクレイピング中...');
     const items = await page.evaluate(() => {
       const rows = Array.from(document.querySelectorAll('tbody tr'));
+      console.log('見つかった行数:', rows.length);
+      
       if (rows.length <= 1) return [];
 
-      return rows.slice(1, 11).map((row, index) => {
-        const cells = row.querySelectorAll('td');
-        let title = '', price = '', km = '', imageUrl = '', url = '';
+      return rows.slice(1, 6).map((row, index) => {
+        const cells = Array.from(row.querySelectorAll('td'));
         
-        for (const cell of cells) {
-          const text = cell.textContent?.trim() || '';
-          const img = cell.querySelector('img');
-          const link = cell.querySelector('a');
-          
-          if (text.match(/\w+/) && text.length > 3 && !title) {
-            title = text;
-          }
-          if (text.includes('万円') || text.includes('円')) {
-            price = text;
-          }
-          if (text.includes('km') && text.match(/\d/)) {
-            km = text;
-          }
-          if (img && !imageUrl) {
-            imageUrl = img.src;
-          }
-          if (link && !url) {
-            url = link.href;
+        // 各セルのテキストを取得してデバッグ
+        const cellTexts = cells.map(cell => cell.textContent?.trim() || '');
+        console.log(`行${index + 1}のセル内容:`, cellTexts);
+        
+        // 画像URL取得
+        const imgElement = row.querySelector('img');
+        const imageUrl = imgElement ? imgElement.src : '';
+        
+        // リンクURL取得
+        const linkElement = row.querySelector('a[href*="detail"], a[href*="vehicle"]');
+        const url = linkElement ? linkElement.href : '';
+        
+        // 車名・グレード（通常は3-4番目のセルあたり）
+        let title = '';
+        let grade = '';
+        for (let i = 2; i < cells.length && i < 6; i++) {
+          const text = cellTexts[i];
+          if (text && text.length > 3 && !text.match(/^\d+$/) && !text.includes('円') && !text.includes('km')) {
+            if (!title) {
+              title = text;
+            } else if (!grade && text !== title) {
+              grade = text;
+            }
           }
         }
         
+        // 地区、年式、走行距離、色、シフト、評価、価格を探す
+        let district = '', year = '', km = '', color = '', shift = '', rating = '', price = '';
+        
+        cellTexts.forEach(text => {
+          // 価格
+          if ((text.includes('万円') || text.includes('円')) && !price) {
+            price = text;
+          }
+          // 走行距離
+          if (text.includes('km') && !km) {
+            km = text;
+          }
+          // 年式（H○○年、20○○年など）
+          if ((text.match(/H\d{2}年/) || text.match(/20\d{2}年/) || text.match(/\d{2}年/)) && !year) {
+            year = text;
+          }
+          // シフト（MT、AT、CVTなど）
+          if ((text === 'MT' || text === 'AT' || text === 'CVT' || text.includes('速')) && !shift) {
+            shift = text;
+          }
+          // 評価（数字のみ、または○点など）
+          if ((text.match(/^[0-9.]+$/) || text.includes('点')) && !rating && !text.includes('km') && !text.includes('円')) {
+            rating = text;
+          }
+          // 色（短い文字列で色を表すもの）
+          if (text.length <= 5 && !color && !text.match(/^\d+$/) && !['MT', 'AT', 'CVT'].includes(text)) {
+            color = text;
+          }
+          // 地区（○○県、または短い地名）
+          if ((text.includes('県') || text.includes('市') || text.length <= 4) && !district && !text.match(/^\d+$/)) {
+            district = text;
+          }
+        });
+        
         return {
           title: title || `車両 ${index + 1}`,
-          price: price || '価格情報なし',
+          grade: grade,
+          district: district,
+          year: year,
           km: km || '走行距離情報なし',
+          color: color,
+          shift: shift,
+          rating: rating,
+          price: price || '価格情報なし',
           imageUrl: imageUrl || '',
           url: url || ''
         };
       });
     });
-
-    for (const item of items) {
-      if (item.url && item.url.startsWith('/')) {
-        item.url = 'https://www.iauc.co.jp' + item.url;
-      }
-      if (item.imageUrl && item.imageUrl.startsWith('/')) {
-        item.imageUrl = 'https://www.iauc.co.jp' + item.imageUrl;
-      }
-    }
-
-    console.log('検索完了:', items.length, '件');
-    return items;
 
   } catch (error) {
     console.error('検索エラー:', error);
@@ -330,16 +378,72 @@ async function handleEvent(event) {
         type: 'image',
         url: item.imageUrl || 'https://via.placeholder.com/240',
         size: 'full',
-        aspectRatio: '1:1',
+        aspectRatio: '4:3',
         aspectMode: 'cover',
       },
       body: {
         type: 'box',
         layout: 'vertical',
         contents: [
-          { type: 'text', text: item.title, weight: 'bold', size: 'md' },
-          { type: 'text', text: `${item.price}円以下`, margin: 'sm' },
-          { type: 'text', text: `${item.km}km以下`, margin: 'sm' },
+          { type: 'text', text: item.title, weight: 'bold', size: 'lg', wrap: true },
+          { type: 'text', text: item.grade || 'グレード情報なし', size: 'sm', color: '#666666', margin: 'sm' },
+          { type: 'separator', margin: 'md' },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'md',
+            contents: [
+              { type: 'text', text: '地区:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.district || '-', size: 'sm', flex: 2 }
+            ]
+          },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'sm',
+            contents: [
+              { type: 'text', text: '年式:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.year || '-', size: 'sm', flex: 2 }
+            ]
+          },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'sm',
+            contents: [
+              { type: 'text', text: '走行:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.km, size: 'sm', flex: 2 }
+            ]
+          },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'sm',
+            contents: [
+              { type: 'text', text: '色:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.color || '-', size: 'sm', flex: 2 }
+            ]
+          },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'sm',
+            contents: [
+              { type: 'text', text: 'シフト:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.shift || '-', size: 'sm', flex: 2 }
+            ]
+          },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'sm',
+            contents: [
+              { type: 'text', text: '評価:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.rating || '-', size: 'sm', flex: 2 }
+            ]
+          },
+          { type: 'separator', margin: 'md' },
+          { type: 'text', text: item.price, weight: 'bold', size: 'xl', color: '#FF5551', margin: 'md', align: 'center' },
         ],
       },
       footer: {
@@ -349,12 +453,12 @@ async function handleEvent(event) {
         contents: [
           {
             type: 'button',
-            style: 'link',
+            style: 'primary',
             height: 'sm',
             action: {
               type: 'uri',
               label: '詳細を見る',
-              uri: item.url,
+              uri: item.url || 'https://www.iauc.co.jp',
             },
           },
         ],
