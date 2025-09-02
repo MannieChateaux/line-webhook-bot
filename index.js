@@ -181,12 +181,9 @@ async function fetchIaucResults({ keyword }) {
       console.log('既にログイン済みです');
     }
 
-    // ログイン後、会場選択ページに確実に遷移
-    console.log('会場選択ページへ移動中...');
-    if (!page.url().includes('/vehicle/')) {
-      await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
+   // ログイン後、会場選択ページの準備を待つ
+    console.log('会場選択ページの準備中...');
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
 // 共有在庫&一発落札の全選択（緑のボタン）
 console.log('共有在庫の全選択中...');
