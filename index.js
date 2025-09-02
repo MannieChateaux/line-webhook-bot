@@ -169,17 +169,32 @@ await new Promise(resolve => setTimeout(resolve, 2000)); // ページの完全�
 
 // 共有在庫&一発落札の全選択（緑のボタン）
 console.log('共有在庫の全選択中...');
-const greenBtnSelector = 'a#btn_vehicle_everyday_all, button#btn_vehicle_everyday_all';
-await page.waitForSelector(greenBtnSelector, { visible: true, timeout: 30000 });
-await page.click(greenBtnSelector);
-await new Promise(resolve => setTimeout(resolve, 1000));
+try {
+  // リンクまたはボタンとして存在する可能性があるため、両方試す
+  const greenBtn = await page.$('a#btn_vehicle_everyday_all') || await page.$('button#btn_vehicle_everyday_all');
+  if (greenBtn) {
+    await greenBtn.click();
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  } else {
+    console.log('共有在庫ボタンが見つかりません（スキップ）');
+  }
+} catch (e) {
+  console.log('共有在庫選択エラー（続行）:', e.message);
+}
 
 // オークション&入札会の全選択（青のボタン）
 console.log('オークション&入札会の全選択中...');
-const blueBtnSelector = 'a#btn_vehicle_day_all, button#btn_vehicle_day_all';
-await page.waitForSelector(blueBtnSelector, { visible: true, timeout: 30000 });
-await page.click(blueBtnSelector);
-await new Promise(resolve => setTimeout(resolve, 1000));
+try {
+  const blueBtn = await page.$('a#btn_vehicle_day_all') || await page.$('button#btn_vehicle_day_all');
+  if (blueBtn) {
+    await blueBtn.click();
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  } else {
+    console.log('オークションボタンが見つかりません（スキップ）');
+  }
+} catch (e) {
+  console.log('オークション選択エラー（続行）:', e.message);
+}
 
 // 次へボタン（ピンクのボタン）
 console.log('次へボタンをクリック中...');
@@ -220,7 +235,7 @@ try {
   console.log('ナビゲーション待機タイムアウト（続行）');
 }
 
-await page.waitForTimeout(2000);
+await new Promise(resolve => setTimeout(resolve, 2000));
 
 
    // 結果スクレイピング - より詳細な情報取得
