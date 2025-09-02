@@ -126,40 +126,66 @@ async function fetchIaucResults({ keyword }) {
     // ログイン処理
     console.log('IAucサイトにアクセス中...');
     await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'domcontentloaded' });
+    await new Promise(resolve => setTimeout(resolve, 3000)); // ページ読み込み待機
 
-    const needsLogin = await page.$('#userid') || await page.$('input[name=userid]');
+    // ログインが必要か確認
+    const needsLogin = await page.$('#userid') || await page.$('input[name=userid]') || 
+                       await page.$('.login-form') || page.url().includes('login');
     
     if (needsLogin) {
-      console.log('ログイン処理中...');
+      console.log('ログインが必要です。ログイン処理を開始...');
       const uid = process.env.IAUC_USER_ID;
       const pw = process.env.IAUC_PASSWORD;
       
       if (!uid || !pw) {
-        throw new Error('IAUC認証情報が設定されていません');
+        throw new Error('IAUC_USER_ID / IAUC_PASSWORD が設定されていません');
       }
 
-      const userSelectors = ['#userid', 'input[name=userid]', 'input[name="user"]'];
-      for (const selector of userSelectors) {
-        if (await page.$(selector)) {
-          await page.type(selector, uid, { delay: 50 });
-          break;
-        }
+      // ユーザーID入力
+      const userField = await page.$('#userid') || await page.$('input[name=userid]');
+      if (userField) {
+        await userField.click();
+        await userField.type(uid, { delay: 50 });
+        console.log('ユーザーID入力完了');
+      } else {
+        throw new Error('ユーザーIDフィールドが見つかりません');
       }
 
-      const passSelectors = ['#password', 'input[name=password]', 'input[type="password"]'];
-      for (const selector of passSelectors) {
-        if (await page.$(selector)) {
-          await page.type(selector, pw, { delay: 50 });
-          break;
-        }
+      // パスワード入力
+      const passField = await page.$('#password') || await page.$('input[name=password]') || 
+                        await page.$('input[type="password"]');
+      if (passField) {
+        await passField.click();
+        await passField.type(pw, { delay: 50 });
+        console.log('パスワード入力完了');
+      } else {
+        throw new Error('パスワードフィールドが見つかりません');
       }
 
-      const loginButton = await page.$('input[type=submit], button[type=submit]');
+      // ログインボタンクリック
+      const loginButton = await page.$('input[type=submit]') || await page.$('button[type=submit]');
       if (loginButton) {
+        console.log('ログインボタンをクリック...');
         await loginButton.click();
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
-        console.log('ログイン完了');
+        
+        // ログイン完了を待つ
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+        console.log('ログイン完了！');
+        
+        // ログイン後、少し待機
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      } else {
+        throw new Error('ログインボタンが見つかりません');
       }
+    } else {
+      console.log('既にログイン済みです');
+    }
+
+    // ログイン後、会場選択ページに確実に遷移
+    console.log('会場選択ページへ移動中...');
+    if (!page.url().includes('/vehicle/')) {
+      await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
 
 // 共有在庫&一発落札の全選択（緑のボタン）
