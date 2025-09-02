@@ -123,12 +123,23 @@ async function fetchIaucResults({ keyword }) {
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP,ja;q=0.9' });
     await page.setViewport({ width: 1280, height: 800 });
 
-    // ログインが必要か確認（URLベースで判定）
-    const currentUrl = page.url();
-    console.log('現在のURL:', currentUrl);
+   // ログイン処理
+    console.log('IAucトップページにアクセス中...');
+    await page.goto('https://www.iauc.co.jp/', { waitUntil: 'domcontentloaded' });
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // ログインボタンをクリック
+    console.log('ログインボタンを探しています...');
+    const loginLinkSelector = 'a[href*="/service/login"]';
+    const loginLink = await page.$(loginLinkSelector);
     
-    if (currentUrl.includes('login') || currentUrl.includes('service')) {
-      console.log('ログインが必要です。ログイン処理を開始...');
+    if (loginLink) {
+      console.log('ログインボタンをクリック...');
+      await loginLink.click();
+      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+      console.log('ログインページに遷移しました');
+      
+      // ログインフォームに入力
       const uid = process.env.IAUC_USER_ID;
       const pw = process.env.IAUC_PASSWORD;
       
@@ -136,34 +147,34 @@ async function fetchIaucResults({ keyword }) {
         throw new Error('IAUC_USER_ID / IAUC_PASSWORD が設定されていません');
       }
 
-      // ユーザーID入力
       console.log('ユーザーID入力中...');
       await page.waitForSelector('#userid', { visible: true, timeout: 5000 });
       await page.type('#userid', uid, { delay: 50 });
 
-      // パスワード入力
       console.log('パスワード入力中...');
       await page.waitForSelector('#password', { visible: true, timeout: 5000 });
       await page.type('#password', pw, { delay: 50 });
 
-      // ログインボタンクリック
-      console.log('ログインボタンをクリック...');
-      const loginButton = await page.$('input[type=submit]');
-      if (loginButton) {
-        await loginButton.click();
-        console.log('ログイン完了を待機中...');
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-        console.log('ログイン完了！');
+      // ログインボタンクリック（フォーム内のボタン）
+      console.log('ログイン実行中...');
+      const loginSubmitButton = await page.$('button#login_button, input[type="submit"], button.btn.btn-default');
+      if (loginSubmitButton) {
+        await loginSubmitButton.click();
+      } else {
+        await page.keyboard.press('Enter');
       }
       
-      // ログイン後、会場選択ページへ移動
-      await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      console.log('ログイン完了を待機中...');
+      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+      console.log('ログイン完了！');
     } else {
-      console.log('ログイン不要、会場選択ページです');
-      // 念のため待機
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      console.log('既にログイン済みの可能性があります');
     }
+
+    // 会場選択ページへ移動
+    console.log('会場選択ページへ移動中...');
+    await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
     console.log('現在のページURL:', page.url());
 
