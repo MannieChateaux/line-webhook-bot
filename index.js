@@ -162,47 +162,45 @@ async function fetchIaucResults({ keyword }) {
       }
     }
 
-// 会場選択
-console.log('会場選択中...');
-await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
-await new Promise(resolve => setTimeout(resolve, 2000)); // ページの完全読み込みを待つ
-
 // 共有在庫&一発落札の全選択（緑のボタン）
 console.log('共有在庫の全選択中...');
 try {
-  // リンクまたはボタンとして存在する可能性があるため、両方試す
-  const greenBtn = await page.$('a#btn_vehicle_everyday_all') || await page.$('button#btn_vehicle_everyday_all');
-  if (greenBtn) {
-    await greenBtn.click();
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  } else {
-    console.log('共有在庫ボタンが見つかりません（スキップ）');
-  }
+  const greenSelector = 'a#btn_vehicle_everyday_all';
+  await page.waitForSelector(greenSelector, { visible: true, timeout: 30000 });
+  await page.click(greenSelector);
+  console.log('共有在庫の全選択完了');
+  await new Promise(resolve => setTimeout(resolve, 1500));
 } catch (e) {
-  console.log('共有在庫選択エラー（続行）:', e.message);
+  console.log('共有在庫選択エラー:', e.message);
+  throw new Error('共有在庫の選択に失敗しました');
 }
 
 // オークション&入札会の全選択（青のボタン）
 console.log('オークション&入札会の全選択中...');
 try {
-  const blueBtn = await page.$('a#btn_vehicle_day_all') || await page.$('button#btn_vehicle_day_all');
-  if (blueBtn) {
-    await blueBtn.click();
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  } else {
-    console.log('オークションボタンが見つかりません（スキップ）');
-  }
+  const blueSelector = 'a#btn_vehicle_day_all';
+  await page.waitForSelector(blueSelector, { visible: true, timeout: 30000 });
+  await page.click(blueSelector);
+  console.log('オークション&入札会の全選択完了');
+  await new Promise(resolve => setTimeout(resolve, 1500));
 } catch (e) {
-  console.log('オークション選択エラー（続行）:', e.message);
+  console.log('オークション選択エラー:', e.message);
+  throw new Error('オークション&入札会の選択に失敗しました');
 }
 
 // 次へボタン（ピンクのボタン）
 console.log('次へボタンをクリック中...');
-const nextBtnSelector = 'button.page-next-button.col-md-2.col-xs-4';
-await page.waitForSelector(nextBtnSelector, { visible: true, timeout: 30000 });
-await page.click(nextBtnSelector);
-await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
-
+try {
+  const nextBtnSelector = 'button.page-next-button[onclick*="check_sites"]';
+  await page.waitForSelector(nextBtnSelector, { visible: true, timeout: 30000 });
+  await page.click(nextBtnSelector);
+  console.log('次へボタンクリック成功');
+  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
+} catch (error) {
+  console.error('次へボタンクリックエラー:', error.message);
+  throw error;
+}
+    
 // フリーワード検索
 console.log('フリーワード検索実行中...');
 
@@ -222,12 +220,18 @@ await page.evaluate((selector) => {
 }, freewordInputSelector);
 await page.type(freewordInputSelector, keyword, { delay: 50 });
 
-// 次へボタンをクリック（ピンクの次へボタン）
+// 次へボタンをクリック（検索実行）
 console.log('検索実行中...');
-const searchNextBtnSelector = 'button.page-next-button.col-lg-2.col-md-2.col-sm-4.col-xs-4';
-await page.waitForSelector(searchNextBtnSelector, { visible: true, timeout: 30000 });
-await page.click(searchNextBtnSelector);
-
+try {
+  // フリーワード検索画面の次へボタンも同じクラス構造のはず
+  const searchNextBtnSelector = 'button.page-next-button';
+  await page.waitForSelector(searchNextBtnSelector, { visible: true, timeout: 30000 });
+  await page.click(searchNextBtnSelector);
+  console.log('検索ボタンクリック成功');
+} catch (error) {
+  console.error('検索ボタンクリックエラー:', error.message);
+}
+    
 console.log('検索結果ページへ遷移中...');
 try {
   await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
