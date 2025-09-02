@@ -123,141 +123,117 @@ async function fetchIaucResults({ keyword }) {
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP,ja;q=0.9' });
     await page.setViewport({ width: 1280, height: 800 });
 
-   // ログイン処理
-    console.log('IAucトップページにアクセス中...');
-    await page.goto('https://www.iauc.co.jp/', { waitUntil: 'domcontentloaded' });
-    await new Promise(resolve => setTimeout(resolve, 3000));
+// --- ログイン処理（置き換え） ---
+console.log('IAucログインフロー開始...');
+await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(800);
 
-    // ログインボタンをクリック
-    console.log('ログインボタンを探しています...');
-    const loginLinkSelector = 'a[href*="/service/login"]';
-    const loginLink = await page.$(loginLinkSelector);
-    
-    if (loginLink) {
-      console.log('ログインボタンをクリック...');
-      await loginLink.click();
-      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-      console.log('ログインページに遷移しました');
-      
-      // ログインフォームに入力
-      const uid = process.env.IAUC_USER_ID;
-      const pw = process.env.IAUC_PASSWORD;
-      
-      if (!uid || !pw) {
-        throw new Error('IAUC_USER_ID / IAUC_PASSWORD が設定されていません');
+// 既ログインならこのページに居ないはずなので、#userid の有無で判定
+const onLoginPage = !!(await page.$('#userid'));
+console.log('login page?', onLoginPage, 'url:', page.url(), 'title:', await page.title());
+
+if (onLoginPage) {
+  const uid = process.env.IAUC_USER_ID;
+  const pw  = process.env.IAUC_PASSWORD;
+  if (!uid || !pw) throw new Error('IAUC_USER_ID / IAUC_PASSWORD が未設定');
+
+  await page.type('#userid', uid, { delay: 40 });
+  await page.type('#password', pw, { delay: 40 });
+
+  const loginSubmit = await page.$('button#login_button, input[type="submit"], button.btn.btn-default');
+  if (loginSubmit) await loginSubmit.click(); else await page.keyboard.press('Enter');
+
+  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
+  console.log('ログイン完了 URL:', page.url());
+} else {
+  console.log('ログイン画面ではないため既ログインと判断');
+}
+// --- ログイン処理（ここまで） ---
+
+  // 会場選択ページへ
+console.log('会場選択ページへ移動中...');
+await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
+console.log('現在のページURL:', page.url(), 'title:', await page.title());
+
+// 全フレーム横断で待ってクリックするユーティリティ
+async function safeClick(selectors, timeout = 45000) {
+  const sels = Array.isArray(selectors) ? selectors : [selectors];
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    for (const s of sels) {
+      for (const f of page.frames()) {
+        const el = await f.$(s);
+        if (el) {
+          try { await f.$eval(s, e => e.click()); }
+          catch { await f.evaluate(sel => { const t = document.querySelector(sel); if (t) t.click(); }, s); }
+          await page.waitForTimeout(400);
+          return true;
+        }
       }
-
-      console.log('ユーザーID入力中...');
-      await page.waitForSelector('#userid', { visible: true, timeout: 5000 });
-      await page.type('#userid', uid, { delay: 50 });
-
-      console.log('パスワード入力中...');
-      await page.waitForSelector('#password', { visible: true, timeout: 5000 });
-      await page.type('#password', pw, { delay: 50 });
-
-      // ログインボタンクリック（フォーム内のボタン）
-      console.log('ログイン実行中...');
-      const loginSubmitButton = await page.$('button#login_button, input[type="submit"], button.btn.btn-default');
-      if (loginSubmitButton) {
-        await loginSubmitButton.click();
-      } else {
-        await page.keyboard.press('Enter');
-      }
-      
-      console.log('ログイン完了を待機中...');
-      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-      console.log('ログイン完了！');
-    } else {
-      console.log('既にログイン済みの可能性があります');
     }
+    await page.waitForTimeout(300);
+  }
 
-    // 会場選択ページへ移動
-    console.log('会場選択ページへ移動中...');
-    await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
-    await new Promise(resolve => setTimeout(resolve, 5000));
+  // デバッグ出力（見える候補とフレーム一覧）
+  try {
+    console.log('iframes:', page.frames().map(fr => fr.url()));
+    const candidates = await page.$$eval('a[id^="btn_vehicle_"], button.page-next-button',
+      els => els.map(e => ({ id: e.id, cls: e.className, dt: e.getAttribute('data-target'), text: (e.textContent||'').trim() })));
+    console.log('btn candidates:', candidates);
+    await page.screenshot({ path: '/tmp/vehicle_before_click.png', fullPage: true }).catch(()=>{});
+  } catch {}
+  throw new Error(`selector not found: ${sels.join(' , ')}`);
+}
 
-    console.log('現在のページURL:', page.url());
-
-// 共有在庫&一発落札の全選択（緑のボタン）
+// 共有在庫＆一発落札「全選択」
 console.log('共有在庫の全選択中...');
-try {
-  const greenSelector = 'a#btn_vehicle_everyday_all';
-  await page.waitForSelector(greenSelector, { visible: true, timeout: 30000 });
-  await page.click(greenSelector);
-  console.log('共有在庫の全選択完了');
-  await new Promise(resolve => setTimeout(resolve, 1500));
-} catch (e) {
-  console.log('共有在庫選択エラー:', e.message);
-  throw new Error('共有在庫の選択に失敗しました');
-}
+await safeClick([
+  '#btn_vehicle_everyday_all',
+  '#vehicle_everyday .checkbox_on_all',
+  'a.title-green-button.checkbox_on_all[data-target="#vehicle_everyday"]'
+], 30000);
 
-// オークション&入札会の全選択（青のボタン）
+// オークション＆入札会「全選択」
 console.log('オークション&入札会の全選択中...');
-try {
-  const blueSelector = 'a#btn_vehicle_day_all';
-  await page.waitForSelector(blueSelector, { visible: true, timeout: 30000 });
-  await page.click(blueSelector);
-  console.log('オークション&入札会の全選択完了');
-  await new Promise(resolve => setTimeout(resolve, 1500));
-} catch (e) {
-  console.log('オークション選択エラー:', e.message);
-  throw new Error('オークション&入札会の選択に失敗しました');
-}
+await safeClick([
+  '#btn_vehicle_day_all',
+  '#vehicle_day .checkbox_on_all',
+  'a.title-button.checkbox_on_all[data-target="#vehicle_day"]'
+], 30000);
 
-// 次へボタン（ピンクのボタン）
+// 「次へ」
 console.log('次へボタンをクリック中...');
-try {
-  const nextBtnSelector = 'button.page-next-button[onclick*="check_sites"]';
-  await page.waitForSelector(nextBtnSelector, { visible: true, timeout: 30000 });
-  await page.click(nextBtnSelector);
-  console.log('次へボタンクリック成功');
-  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
-} catch (error) {
-  console.error('次へボタンクリックエラー:', error.message);
-  throw error;
-}
-    
-// フリーワード検索
+await safeClick([
+  'button.page-next-button[onclick*="check_sites"]',
+  'button.page-next-button'
+], 30000);
+await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
+
+// フリーワード検索タブ
 console.log('フリーワード検索実行中...');
+await safeClick(['#button_freeword_search', 'a#button_freeword_search', 'a[href="#freeword"]#button_freeword_search']);
 
-// フリーワード検索タブをクリック
-const freewordTabSelector = 'a#button_freeword_search, button#button_freeword_search';
-await page.waitForSelector(freewordTabSelector, { visible: true, timeout: 30000 });
-await page.click(freewordTabSelector);
-await new Promise(resolve => setTimeout(resolve, 1500));
+// 入力
+const freewordInputSel = ['input[name="freeword_search"]', 'input[name="freeword"]'];
+await safeClick(freewordInputSel, 20000); // 出現待ち
+const input = await page.$(freewordInputSel[0]) || await page.$(freewordInputSel[1]);
+await input.click();
+await page.keyboard.type(keyword, { delay: 30 });
 
-// フリーワード入力欄を探して入力
-console.log('キーワード入力中:', keyword);
-const freewordInputSelector = 'input#freewordForm\\.freeword-search-input';
-await page.waitForSelector(freewordInputSelector, { visible: true, timeout: 30000 });
-await page.click(freewordInputSelector);
-await page.evaluate((selector) => {
-  document.querySelector(selector).value = '';
-}, freewordInputSelector);
-await page.type(freewordInputSelector, keyword, { delay: 50 });
+// 送信
+const submitSels = ['button[type="submit"]', 'input[value="検索"]', 'button[name="search"]', '#button_freeword_submit'];
+let hitSel = null; for (const s of submitSels) { if (await page.$(s)) { hitSel = s; break; } }
+if (hitSel) { await safeClick(hitSel); } else { await page.keyboard.press('Enter'); }
 
-// 次へボタンをクリック（検索実行）
-console.log('検索実行中...');
-try {
-  // フリーワード検索画面の次へボタンも同じクラス構造のはず
-  const searchNextBtnSelector = 'button.page-next-button';
-  await page.waitForSelector(searchNextBtnSelector, { visible: true, timeout: 30000 });
-  await page.click(searchNextBtnSelector);
-  console.log('検索ボタンクリック成功');
-} catch (error) {
-  console.error('検索ボタンクリックエラー:', error.message);
-}
-    
-console.log('検索結果ページへ遷移中...');
 try {
   await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
-} catch {
-  console.log('ナビゲーション待機タイムアウト（続行）');
-}
+} catch { console.log('ナビゲーション待機タイムアウト（続行）'); }
 
-await new Promise(resolve => setTimeout(resolve, 2000));
+// 結果行が描画されるまで待つ（この行までが置き換え範囲）
+await page.waitForSelector('tbody tr', { timeout: 15000 }).catch(()=>{});
 
-
+    
    // 結果スクレイピング - より詳細な情報取得
     console.log('検索結果をスクレイピング中...');
     const items = await page.evaluate(() => {
