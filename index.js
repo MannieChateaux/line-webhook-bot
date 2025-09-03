@@ -1,6 +1,5 @@
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
-const axios = require('axios');       // ← 追加
 const puppeteer = require('puppeteer');
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -348,101 +347,80 @@ try {
 await page.waitForSelector('tbody tr', { timeout: 15000 }).catch(()=>{});
 
     
-   // 結果スクレイピング - より詳細な情報取得
-    console.log('検索結果をスクレイピング中...');
-    const items = await page.evaluate(() => {
-      const rows = Array.from(document.querySelectorAll('tbody tr'));
-      console.log('見つかった行数:', rows.length);
-      
-      if (rows.length <= 1) return [];
+// 結果スクレイピング - より詳細な情報取得（ここから置き換え）
+console.log('検索結果をスクレイピング中...');
 
-      return rows.slice(1, 6).map((row, index) => {
-        const cells = Array.from(row.querySelectorAll('td'));
-        
-        // 各セルのテキストを取得してデバッグ
-        const cellTexts = cells.map(cell => cell.textContent?.trim() || '');
-        console.log(`行${index + 1}のセル内容:`, cellTexts);
-        
-        // 画像URL取得
-        const imgElement = row.querySelector('img');
-        const imageUrl = imgElement ? imgElement.src : '';
-        
-        // リンクURL取得
-        const linkElement = row.querySelector('a[href*="detail"], a[href*="vehicle"]');
-        const url = linkElement ? linkElement.href : '';
-        
-        // 車名・グレード（通常は3-4番目のセルあたり）
-        let title = '';
-        let grade = '';
-        for (let i = 2; i < cells.length && i < 6; i++) {
-          const text = cellTexts[i];
-          if (text && text.length > 3 && !text.match(/^\d+$/) && !text.includes('円') && !text.includes('km')) {
-            if (!title) {
-              title = text;
-            } else if (!grade && text !== title) {
-              grade = text;
-            }
-          }
-        }
-        
-        // 地区、年式、走行距離、色、シフト、評価、価格を探す
-        let district = '', year = '', km = '', color = '', shift = '', rating = '', price = '';
-        
-        cellTexts.forEach(text => {
-          // 価格
-          if ((text.includes('万円') || text.includes('円')) && !price) {
-            price = text;
-          }
-          // 走行距離
-          if (text.includes('km') && !km) {
-            km = text;
-          }
-          // 年式（H○○年、20○○年など）
-          if ((text.match(/H\d{2}年/) || text.match(/20\d{2}年/) || text.match(/\d{2}年/)) && !year) {
-            year = text;
-          }
-          // シフト（MT、AT、CVTなど）
-          if ((text === 'MT' || text === 'AT' || text === 'CVT' || text.includes('速')) && !shift) {
-            shift = text;
-          }
-          // 評価（数字のみ、または○点など）
-          if ((text.match(/^[0-9.]+$/) || text.includes('点')) && !rating && !text.includes('km') && !text.includes('円')) {
-            rating = text;
-          }
-          // 色（短い文字列で色を表すもの）
-          if (text.length <= 5 && !color && !text.match(/^\d+$/) && !['MT', 'AT', 'CVT'].includes(text)) {
-            color = text;
-          }
-          // 地区（○○県、または短い地名）
-          if ((text.includes('県') || text.includes('市') || text.length <= 4) && !district && !text.match(/^\d+$/)) {
-            district = text;
-          }
-        });
-        
-        return {
-          title: title || `車両 ${index + 1}`,
-          grade: grade,
-          district: district,
-          year: year,
-          km: km || '走行距離情報なし',
-          color: color,
-          shift: shift,
-          rating: rating,
-          price: price || '価格情報なし',
-          imageUrl: imageUrl || '',
-          url: url || ''
-        };
-      });
-    });
+await page.waitForSelector('tbody tr', { timeout: 15000 }).catch(() => {});
+const items = await page.evaluate(() => {
+  const rows = Array.from(document.querySelectorAll('tbody tr'));
+  if (rows.length <= 1) return [];
 
-  } catch (error) {
-    console.error('検索エラー:', error);
-    throw error;
-  } finally {
-    if (page) await page.close().catch(console.error);
-    if (browser) await browser.close().catch(console.error);
-  }
+  return rows.slice(1, 6).map((row, index) => {
+    const cells = Array.from(row.querySelectorAll('td'));
+    const cellTexts = cells.map(c => (c.textContent || '').trim());
+
+    // 画像URL
+    const img = row.querySelector('img');
+    const imageUrl = img ? (img.src || '') : '';
+
+    // 詳細URL
+    const link = row.querySelector('a[href*="detail"], a[href*="vehicle"]');
+    const url = link ? (link.href || '') : '';
+
+    // 車名・グレードをざっくり推定
+    let title = '';
+    let grade = '';
+    for (let i = 2; i < Math.min(cells.length, 6); i++) {
+      const t = cellTexts[i];
+      if (!t) continue;
+      const looksLikeNum = /^\d+$/.test(t);
+      if (!title && !looksLikeNum && !t.includes('円') && !t.includes('km')) {
+        title = t;
+      } else if (!grade && t !== title && !looksLikeNum && !t.includes('円') && !t.includes('km')) {
+        grade = t;
+      }
+    }
+
+    // 他の属性をざっくり抽出
+    let district = '', year = '', km = '', color = '', shift = '', rating = '', price = '';
+    for (const t of cellTexts) {
+      if (!price && (t.includes('万円') || t.includes('円'))) price = t;
+      if (!km && t.includes('km')) km = t;
+      if (!year && (/H\d{2}年/.test(t) || /20\d{2}年/.test(t) || /\d{2}年/.test(t))) year = t;
+      if (!shift && (t === 'MT' || t === 'AT' || t === 'CVT' || t.includes('速'))) shift = t;
+      if (!rating && !t.includes('km') && !t.includes('円') && (/^[0-9.]+$/.test(t) || t.includes('点'))) rating = t;
+      if (!color && t.length <= 5 && !/^\d+$/.test(t) && !['MT','AT','CVT'].includes(t)) color = t;
+      if (!district && (!/^\d+$/.test(t)) && (t.includes('県') || t.includes('市') || t.length <= 4)) district = t;
+    }
+
+    return {
+      title: title || `車両 ${index + 1}`,
+      grade,
+      district,
+      year,
+      km: km || '走行距離情報なし',
+      color,
+      shift,
+      rating,
+      price: price || '価格情報なし',
+      imageUrl,
+      url
+    };
+  });
+});
+
+console.log('スクレイピング完了 件数:', items.length);
+return items;
+// ここまで（置き換え）で try の中は終わり
+
+} catch (error) {
+  console.error('検索エラー:', error);
+  throw error;
+} finally {
+  try { if (page) await page.close(); } catch (e) { console.error(e); }
+  try { if (browser) await browser.close(); } catch (e) { console.error(e); }
 }
+// ← ここで fetchIaucResults 関数のブロックも閉じる（元と同じ位置）
 
 async function handleEvent(event) {
   console.log('📨 イベント受信:', event.type, event.message?.type);
