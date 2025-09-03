@@ -2,6 +2,7 @@ const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
 const axios = require('axios');       // ← 追加
 const puppeteer = require('puppeteer');
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // 環境変数
 const config = {
@@ -126,7 +127,7 @@ async function fetchIaucResults({ keyword }) {
 // --- ログイン処理（置き換え） ---
 console.log('IAucログインフロー開始...');
 await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
-await page.waitForTimeout(800);
+await sleep(800);
 
 // 既ログインならこのページに居ないはずなので、#userid の有無で判定
 const onLoginPage = !!(await page.$('#userid'));
@@ -167,12 +168,12 @@ async function safeClick(selectors, timeout = 45000) {
         if (el) {
           try { await f.$eval(s, e => e.click()); }
           catch { await f.evaluate(sel => { const t = document.querySelector(sel); if (t) t.click(); }, s); }
-          await page.waitForTimeout(400);
+          await sleep(400);
           return true;
         }
       }
     }
-    await page.waitForTimeout(300);
+    await sleep(300);
   }
 
   // デバッグ出力（見える候補とフレーム一覧）
