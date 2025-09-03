@@ -124,40 +124,129 @@ async function fetchIaucResults({ keyword }) {
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP,ja;q=0.9' });
     await page.setViewport({ width: 1280, height: 800 });
 
-// --- ログイン処理（置き換え） ---
+// --- ログイン処理（強化版） ---
 console.log('IAucログインフロー開始...');
-await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
-await sleep(800);
 
-// 既ログインならこのページに居ないはずなので、#userid の有無で判定
-const onLoginPage = !!(await page.$('#userid'));
-console.log('login page?', onLoginPage, 'url:', page.url(), 'title:', await page.title());
+const uid = process.env.IAUC_USER_ID;
+const pw  = process.env.IAUC_PASSWORD;
+if (!uid || !pw) throw new Error('IAUC_USER_ID / IAUC_PASSWORD が未設定');
 
-if (onLoginPage) {
-  const uid = process.env.IAUC_USER_ID;
-  const pw  = process.env.IAUC_PASSWORD;
-  if (!uid || !pw) throw new Error('IAUC_USER_ID / IAUC_PASSWORD が未設定');
+// まずトップへ
+await page.goto('https://www.iauc.co.jp/', { waitUntil: 'networkidle2' });
 
-  await page.type('#userid', uid, { delay: 40 });
-  await page.type('#password', pw, { delay: 40 });
+// ログイン済み判定（ヘッダーのログアウトリンクで見る）
+async function isLoggedIn() {
+  const sel = 'a[href*="/service/logout"]';
+  return !!(await page.$(sel));
+}
 
-  const loginSubmit = await page.$('button#login_button, input[type="submit"], button.btn.btn-default');
-  if (loginSubmit) await loginSubmit.click(); else await page.keyboard.press('Enter');
+// ログインフォームを全フレームから探す
+async function findLoginFrame(timeout = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    for (const f of page.frames()) {
+      if (await f.$('#userid')) return f;
+    }
+    await sleep(300);
+  }
+  return null;
+}
 
-  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
-  console.log('ログイン完了 URL:', page.url());
+if (!(await isLoggedIn())) {
+  console.log('未ログイン。ログインリンクへ遷移します...');
+  // 「ログイン」リンクをクリック（テキスト/URL どちらでも）
+  const clicked = await page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll('a'));
+    const hit = links.find(a =>
+      /ログイン/.test(a.textContent || '') ||
+      /\/service\/login/.test(a.getAttribute('href') || '')
+    );
+    if (hit) { hit.click(); return true; }
+    return false;
+  });
+  if (clicked) {
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {});
+  } else {
+    // 直でログインURLへ
+    await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
+  }
+
+  // ログインフォーム（メイン/iframe）を掴む
+  const f = (await findLoginFrame(15000)) || page;
+  if (!(await f.$('#userid'))) {
+    throw new Error('ログインフォームが見つかりませんでした');
+  }
+
+  await f.type('#userid', uid, { delay: 40 });
+  await f.type('#password', pw, { delay: 40 });
+  const submit =
+    (await f.$('button#login_button')) ||
+    (await f.$('input[type="submit"]')) ||
+    (await f.$('button.btn.btn-default'));
+  if (submit) { await submit.click(); } else { await f.keyboard.press('Enter'); }
+
+  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {});
+  console.log('ログイン遷移後 URL:', page.url());
+
+  if (!(await isLoggedIn())) {
+    throw new Error('ログインに失敗しました（ログアウトリンクが見つかりません）');
+  }
 } else {
-  console.log('ログイン画面ではないため既ログインと判断');
+  console.log('既にログイン済みと判定');
 }
 // --- ログイン処理（ここまで） ---
+
 
   // 会場選択ページへ
 console.log('会場選択ページへ移動中...');
 await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
 console.log('現在のページURL:', page.url(), 'title:', await page.title());
 
-    // --- インフォメーション画面 → 検索UI復旧 ---
+// --- インフォメーション画面 → 検索UIへ復旧 ---
 await sleep(600);
+const uiSelectors = ['#btn_vehicle_everyday_all', '#vehicle_everyday .checkbox_on_all', '#btn_vehicle_day_all'];
+let uiFound = false;
+for (const s of uiSelectors) { if (await page.$(s)) { uiFound = true; break; } }
+
+if (!uiFound) {
+  const isInfo = await page.evaluate(() => {
+    const body = (document.body?.innerText || '');
+    return /インフォメーション|Information/i.test(document.title) || /インフォメーション|Information/i.test(body);
+  });
+
+  if (isInfo) {
+    console.log('vehicle はインフォメーション画面。復旧リンクを探索します...');
+    const clicked = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll('a'));
+      const hit = links.find(a =>
+        /検索|会場|車両|フリーワード/.test(a.textContent || '') ||
+        /vehicle\/(search|list|)/.test(a.getAttribute('href') || '')
+      );
+      if (hit) { hit.click(); return true; }
+      return false;
+    });
+    if (clicked) {
+      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(()=>{});
+      console.log('復旧後URL:', await page.url());
+    } else {
+      // 直接 vehicle 再ロード
+      await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
+    }
+  }
+
+  // もう一度UIの存在確認＆ダメならデバッグ出力
+  let stillMissing = true;
+  for (const s of uiSelectors) { if (await page.$(s)) { stillMissing = false; break; } }
+  if (stillMissing) {
+    try {
+      const preview = await page.evaluate(() => (document.body?.innerText || '').slice(0, 400));
+      console.log('vehicle body preview:', preview);
+      await page.screenshot({ path: '/tmp/vehicle_info_screen.png', fullPage: true }).catch(()=>{});
+    } catch {}
+    // ここでは throw せず、下の safeClick のデバッグでも拾う
+  }
+}
+// --- 復旧ここまで ---
 
 // 会場選択UIの存在をざっくり確認
 const uiSelectors = ['#btn_vehicle_everyday_all', '#vehicle_everyday .checkbox_on_all', '#btn_vehicle_day_all'];
