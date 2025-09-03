@@ -140,12 +140,30 @@ async function isLoggedIn() {
   return !!(await page.$(sel));
 }
 
-// ログインフォームを全フレームから探す
-async function findLoginFrame(timeout = 15000) {
+// ログインフォームを全フレームから探し、ユーザー/パス/送信のセレクタを返す
+async function findLoginTarget(timeout = 20000) {
   const start = Date.now();
+  const userCandidates = ['#userid','input[name="userid"]','input[name*="user"]','input[id*="user"]','input[name*="id"]'];
+  const passCandidates = ['#password','input[type="password"]','input[name*="pass"]','input[id*="pass"]'];
+  const submitCandidates = ['button#login_button','button[type="submit"]','input[type="submit"]','button.btn.btn-default'];
+
   while (Date.now() - start < timeout) {
     for (const f of page.frames()) {
-      if (await f.$('#userid')) return f;
+      let passSelHit = null;
+      for (const ps of passCandidates) { if (await f.$(ps)) { passSelHit = ps; break; } }
+      if (!passSelHit) continue;
+
+      let userSelHit = null;
+      for (const us of userCandidates) { if (await f.$(us)) { userSelHit = us; break; } }
+      if (!userSelHit) {
+        const any = await f.$('form input[type="text"], form input[type="email"], form input:not([type])');
+        if (any) userSelHit = 'form input[type="text"], form input[type="email"], form input:not([type])';
+      }
+
+      let submitSelHit = null;
+      for (const ss of submitCandidates) { if (await f.$(ss)) { submitSelHit = ss; break; } }
+
+      return { frame: f, userSel: userSelHit, passSel: passSelHit, submitSel: submitSelHit };
     }
     await sleep(300);
   }
@@ -154,6 +172,7 @@ async function findLoginFrame(timeout = 15000) {
 
 if (!(await isLoggedIn())) {
   console.log('未ログイン。ログインリンクへ遷移します...');
+ 
   // 「ログイン」リンクをクリック（テキスト/URL どちらでも）
   const clicked = await page.evaluate(() => {
     const links = Array.from(document.querySelectorAll('a'));
@@ -171,31 +190,33 @@ if (!(await isLoggedIn())) {
     await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
   }
 
-  // ログインフォーム（メイン/iframe）を掴む
-  const f = (await findLoginFrame(15000)) || page;
-  if (!(await f.$('#userid'))) {
-    throw new Error('ログインフォームが見つかりませんでした');
-  }
-
-  await f.type('#userid', uid, { delay: 40 });
-  await f.type('#password', pw, { delay: 40 });
-  const submit =
-    (await f.$('button#login_button')) ||
-    (await f.$('input[type="submit"]')) ||
-    (await f.$('button.btn.btn-default'));
-  if (submit) { await submit.click(); } else { await f.keyboard.press('Enter'); }
-
-  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {});
-  console.log('ログイン遷移後 URL:', page.url());
-
-  if (!(await isLoggedIn())) {
-    throw new Error('ログインに失敗しました（ログアウトリンクが見つかりません）');
-  }
-} else {
-  console.log('既にログイン済みと判定');
+ // ログインフォーム（メイン/iframe）を掴む
+const target = await findLoginTarget(20000);
+if (!target || !target.passSel) {
+  try {
+    console.log('login frames:', page.frames().map(fr => fr.url()));
+    await page.screenshot({ path: '/tmp/login_screen.png', fullPage: true }).catch(()=>{});
+    const bodyPreview = await page.evaluate(() => (document.body?.innerText || '').slice(0, 500));
+    console.log('login body preview:', bodyPreview);
+  } catch {}
+  throw new Error('ログインフォームが見つかりませんでした');
 }
-// --- ログイン処理（ここまで） ---
 
+const { frame: f, userSel, passSel, submitSel } = target;
+
+if (userSel) await f.type(userSel, uid, { delay: 40 });
+await f.type(passSel, pw, { delay: 40 });
+
+if (submitSel) { await f.click(submitSel); } else { await f.keyboard.press('Enter'); }
+
+await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {});
+console.log('ログイン遷移後 URL:', page.url());
+
+if (!(await isLoggedIn())) {
+  throw new Error('ログインに失敗しました（ログアウトリンクが見つかりません）');
+} else {
+  console.log('ログイン完了！');
+}
 
   // 会場選択ページへ
 console.log('会場選択ページへ移動中...');
