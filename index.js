@@ -39,7 +39,7 @@ app.post(
     payload: req.rawBody,
   })(req, res, next),
   async (req, res) => {
-    const events = req.body.events;
+     events = req.body.events;
     // 先に 200 を返す（重要）
     res.sendStatus(200);
     // 後処理は非同期で流す
@@ -155,6 +155,53 @@ if (onLoginPage) {
 console.log('会場選択ページへ移動中...');
 await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
 console.log('現在のページURL:', page.url(), 'title:', await page.title());
+
+    // --- インフォメーション画面 → 検索UI復旧 ---
+await sleep(600);
+
+// 会場選択UIの存在をざっくり確認
+const uiSelectors = ['#btn_vehicle_everyday_all', '#vehicle_everyday .checkbox_on_all', '#btn_vehicle_day_all'];
+let uiFound = false;
+for (const s of uiSelectors) { if (await page.$(s)) { uiFound = true; break; } }
+
+if (!uiFound) {
+  // タイトル or 本文に「インフォメーション」が出ているか
+  const isInfo = await page.evaluate(() => {
+    const body = (document.body?.innerText || '');
+    return /インフォメーション|Information/i.test(document.title) || /インフォメーション|Information/i.test(body);
+  });
+
+  if (isInfo) {
+    console.log('vehicle はインフォメーション画面。復旧リンクを探索します...');
+    // 「検索/会場/車両/フリーワード」等のリンクへ遷移を試みる
+    const clicked = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll('a'));
+      const hit = links.find(a =>
+        /検索|会場|車両|フリーワード/.test(a.textContent || '') ||
+        /vehicle\/(search|list)/.test(a.getAttribute('href') || '')
+      );
+      if (hit) { hit.click(); return true; }
+      return false;
+    });
+    if (clicked) {
+      try { await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }); } catch {}
+      console.log('復旧後URL:', location.href);
+    }
+  }
+
+  // もう一度UIの存在確認＆ダメならデバッグ出力
+  let stillMissing = true;
+  for (const s of uiSelectors) { if (await page.$(s)) { stillMissing = false; break; } }
+  if (stillMissing) {
+    try {
+      const preview = await page.evaluate(() => (document.body?.innerText || '').slice(0, 400));
+      console.log('vehicle body preview:', preview);
+      await page.screenshot({ path: '/tmp/vehicle_info_screen.png', fullPage: true }).catch(()=>{});
+    } catch {}
+    // ここで throw せずに続行して safeClick 側のデバッグでも拾う
+  }
+}
+// --- ここまで挿入 ---
 
 // 全フレーム横断で待ってクリックするユーティリティ
 async function safeClick(selectors, timeout = 45000) {
