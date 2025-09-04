@@ -148,6 +148,14 @@ if (!(await isLoggedIn())) {
   // STAGE 1: ログインページに直接アクセス
   console.log('STAGE 1: ログインページへ直接アクセス');
   await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
+
+　// STAGE 1の後に追加
+　console.log('STAGE 1.5: 最初のログインボタンクリック');
+　await page.waitForSelector('a.login-btn.btn.btn-info[href*="/service/login"]', { timeout: 10000 });
+　await page.click('a.login-btn.btn.btn-info[href*="/service/login"]');
+　await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+
+　// その後にSTAGE 2を継続
   
   // STAGE 2: フォーム要素が出現するまで待機
   console.log('STAGE 2: ログインフォーム要素の待機');
