@@ -123,143 +123,93 @@ async function fetchIaucResults({ keyword }) {
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP,ja;q=0.9' });
     await page.setViewport({ width: 1280, height: 800 });
 
-// --- ログイン処理（強化版） ---
-console.log('IAucログインフロー開始...');
+// 2段階ログイン最終案（マッシュアップ版）
+// 116行目から217行目付近のログイン処理部分を以下に完全置換
+
+console.log('IAuc 2段階ログインフロー開始...');
 
 const uid = process.env.IAUC_USER_ID;
-const pw  = process.env.IAUC_PASSWORD;
+const pw = process.env.IAUC_PASSWORD;
 if (!uid || !pw) throw new Error('IAUC_USER_ID / IAUC_PASSWORD が未設定');
 
-// まずトップへ
-await page.goto('https://www.iauc.co.jp/', { waitUntil: 'networkidle2' });
-
-// ログイン済み判定（ヘッダーのログアウトリンクで見る）
+// ログイン状態確認関数
 async function isLoggedIn() {
-  const sel = 'a[href*="/service/logout"]';
-  return !!(await page.$(sel));
-}
-
-// ログインフォームを全フレームから探し、ユーザー/パス/送信のセレクタを返す
-async function findLoginTarget(timeout = 20000) {
-  const start = Date.now();
-  const userCandidates = ['#userid','input[name="userid"]','input[name*="user"]','input[id*="user"]','input[name*="id"]'];
-  const passCandidates = ['#password','input[type="password"]','input[name*="pass"]','input[id*="pass"]'];
-  const submitCandidates = ['button#login_button','button[type="submit"]','input[type="submit"]','button.btn.btn-default'];
-
-  while (Date.now() - start < timeout) {
-    for (const f of page.frames()) {
-      let passSelHit = null;
-      for (const ps of passCandidates) { if (await f.$(ps)) { passSelHit = ps; break; } }
-      if (!passSelHit) continue;
-
-      let userSelHit = null;
-      for (const us of userCandidates) { if (await f.$(us)) { userSelHit = us; break; } }
-      if (!userSelHit) {
-        const any = await f.$('form input[type="text"], form input[type="email"], form input:not([type])');
-        if (any) userSelHit = 'form input[type="text"], form input[type="email"], form input:not([type])';
-      }
-
-      let submitSelHit = null;
-      for (const ss of submitCandidates) { if (await f.$(ss)) { submitSelHit = ss; break; } }
-
-      return { frame: f, userSel: userSelHit, passSel: passSelHit, submitSel: submitSelHit };
-    }
-    await sleep(300);
+  try {
+    const logoutLink = await page.$('a[href*="/service/logout"]');
+    return !!logoutLink;
+  } catch {
+    return false;
   }
-  return null;
 }
 
 if (!(await isLoggedIn())) {
-  console.log('未ログイン。ログインリンクへ遷移します...');
- 
-  // 「ログイン」リンクをクリック（テキスト/URL どちらでも）
-  const clicked = await page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll('a'));
-    const hit = links.find(a =>
-      /ログイン/.test(a.textContent || '') ||
-      /\/service\/login/.test(a.getAttribute('href') || '')
-    );
-    if (hit) { hit.click(); return true; }
-    return false;
+  console.log('2段階ログイン処理開始...');
+  
+  // STAGE 1: ログインページに直接アクセス
+  console.log('STAGE 1: ログインページへ直接アクセス');
+  await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
+  
+  // STAGE 2: フォーム要素が出現するまで待機
+  console.log('STAGE 2: ログインフォーム要素の待機');
+  await page.waitForSelector('#userid', { timeout: 20000 });
+  await page.waitForSelector('#password', { timeout: 20000 });
+  await page.waitForSelector('#login_button', { timeout: 20000 });
+  
+  // STAGE 3: ID/パスワード入力
+  console.log('STAGE 3: ID/パスワード入力');
+  await page.type('#userid', uid, { delay: 40 });
+  await page.type('#password', pw, { delay: 40 });
+  
+  // STAGE 4: ログインボタンクリック
+  console.log('STAGE 4: ログインボタンクリック');
+  await page.click('#login_button');
+  
+  // STAGE 5: ログイン済み状態かURLベースで成功判定
+  console.log('STAGE 5: ログイン成功判定');
+  
+  // 複数の成功条件を並行して待機
+  await Promise.race([
+    page.waitForSelector('a[href*="/service/logout"]', { timeout: 30000 }),
+    page.waitForFunction(() => location.href.includes('/vehicle/'), { timeout: 30000 })
+  ]).catch(() => {
+    // タイムアウトの場合は現在の状態をチェック
+    console.log('成功判定タイムアウト、現在状態を確認中...');
   });
- if (clicked) {
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {});
-  } else {
-    // 直でログインURLへ
-    await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
-  }
-
-  // 1) クリックに頼らず、まずは確実に直接遷移が一番確実
-  await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'networkidle2' });
-
-  // 2) 念のため、トップに「ログイン」ボタンが残っていればクリックして二重化（どちらでもOK）
-  const topLoginLink = await page.$('a.login-btn.btn.btn-info[href*="/service/login"]');
-  if (topLoginLink) {
-    try { await topLoginLink.click(); } catch {}
-    await sleep(400);
-  }
-
-  // 3) 「/service/login」を含むフレームが出るのを待つ（ページ遷移ではなくフレーム遷移）
-  const loginFrame = await (async () => {
-    const t0 = Date.now();
-    while (Date.now() - t0 < 20000) {
-      const hit = page.frames().find(f => /\/service\/login/i.test(f.url()));
-      if (hit) return hit;
-      await sleep(300);
-    }
-    return null;
-  })();
-
-  // デバッグ出力（どのフレームがあるか）
-  try {
-    console.log('login frames:', page.frames().map(fr => fr.url()));
-    const preview = await page.evaluate(() => (document.body?.innerText || '').slice(0, 500));
-    console.log('login body preview:', preview);
-  } catch {}
-
-  // 4) もしフレームが取れなければ、もう一度ダイレクト遷移で読み込ける
-  if (!loginFrame) {
-    await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
-    await sleep(500);
-  }
-
-  // 5) ← この直後の既存コード
-  const target = await findLoginTarget(20000);
-  if (!target || !target.passSel) {
-    throw new Error('ログインフォームが見つかりませんでした');
-  }
-
-  const { frame: f, userSel, passSel, submitSel } = target;
-
-  if (userSel) await f.type(userSel, uid, { delay: 40 });
-  await f.type(passSel, pw, { delay: 40 });
-
-  // ログインボタンクリック（強化版）
-  if (submitSel) { 
-      try {
-          await f.click(submitSel);
-          console.log('通常クリックでログイン送信成功');
-      } catch {
-          // JavaScriptクリックで再試行
-          await f.evaluate((sel) => {
-              const btn = document.querySelector(sel);
-              if (btn && btn.onclick) btn.onclick();
-              else if (btn) btn.click();
-          }, submitSel);
-          console.log('JavaScriptクリックでログイン送信成功');
+  
+  // STAGE 6: 最終確認と/vehicle/への遷移
+  console.log('STAGE 6: 最終確認');
+  const currentUrl = page.url();
+  const loginSuccess = await isLoggedIn();
+  const onVehiclePage = currentUrl.includes('/vehicle/');
+  
+  console.log('ログイン遷移後 URL:', currentUrl);
+  console.log('ログアウトリンク存在:', loginSuccess);
+  console.log('vehicle ページ到達:', onVehiclePage);
+  
+  if (!loginSuccess && !onVehiclePage) {
+    // vehicle ページに手動遷移を試行
+    console.log('vehicle ページに手動遷移中...');
+    try {
+      await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2', timeout: 30000 });
+      const afterManualUrl = page.url();
+      console.log('手動遷移後 URL:', afterManualUrl);
+      
+      if (!afterManualUrl.includes('/vehicle/')) {
+        const debugInfo = await page.evaluate(() => ({
+          title: document.title,
+          bodyPreview: document.body.innerText.substring(0, 500)
+        }));
+        console.log('ログイン失敗デバッグ情報:', debugInfo);
+        throw new Error('ログインに失敗しました（ログアウトリンクが見つからず、vehicle ページにも到達できません）');
       }
-  } else { 
-      await f.keyboard.press('Enter'); 
+    } catch (navError) {
+      throw new Error('ログインに失敗しました（vehicle ページへの遷移も失敗）');
+    }
   }
-
-  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {});
-  console.log('ログイン遷移後 URL:', page.url());
-
-  if (!(await isLoggedIn())) {
-    throw new Error('ログインに失敗しました（ログアウトリンクが見つかりません）');
-  } else {
-    console.log('ログイン完了！');
-  }
+  
+  console.log('ログイン完了！');
+} else {
+  console.log('既にログイン済み');
 }
 
   // 会場選択ページへ
