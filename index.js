@@ -151,8 +151,14 @@ if (!(await isLoggedIn())) {
   // STAGE 1.5: 最初のログインボタンクリック
   console.log('STAGE 1.5: 最初のログインボタンクリック');
   await page.waitForSelector('a.login-btn.btn.btn-info[href*="/service/login"]', { timeout: 10000 });
-  await page.click('a.login-btn.btn.btn-info[href*="/service/login"]');
-  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+    page.click('a.login-btn.btn.btn-info[href*="/service/login"]')
+  ]);
+
+  console.log('ログインページ遷移完了:', page.url());
+
+console.log('ログインページ遷移完了:', page.url());
   
   // STAGE 2: フォーム要素が出現するまで待機（修正されたセレクタ）
   console.log('STAGE 2: ログインフォーム要素の待機');
