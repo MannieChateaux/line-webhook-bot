@@ -2,13 +2,12 @@
   "name": "line-webhook",
   "version": "1.0.0",
   "main": "index.js",
- "scripts": {
-  "start": "node -e \"new Function(require('fs').readFileSync('index.js','utf8'))\" && node index.js"
-}
+  "scripts": {
+    "start": "node -e \"new Function(require('fs').readFileSync('index.js','utf8'))\" && node index.js"
+  },
   "dependencies": {
     "express": "^4.18.2",
     "@line/bot-sdk": "^7.4.1",
-    "axios": "^1.4.0",
     "puppeteer": "22.10.0"
   }
 }
