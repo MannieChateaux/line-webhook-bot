@@ -123,8 +123,7 @@ async function fetchIaucResults({ keyword }) {
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP,ja;q=0.9' });
     await page.setViewport({ width: 1280, height: 800 });
 
-// 2段階ログイン最終案（マッシュアップ版）
-// 116行目から217行目付近のログイン処理部分を以下に完全置換
+// 修正版：126行目から263行目を以下に置き換え
 
 console.log('IAuc 2段階ログインフロー開始...');
 
@@ -148,39 +147,47 @@ if (!(await isLoggedIn())) {
   // STAGE 1: ログインページに直接アクセス
   console.log('STAGE 1: ログインページへ直接アクセス');
   await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
-
-　// STAGE 1の後に追加
-　console.log('STAGE 1.5: 最初のログインボタンクリック');
-　await page.waitForSelector('a.login-btn.btn.btn-info[href*="/service/login"]', { timeout: 10000 });
-　await page.click('a.login-btn.btn.btn-info[href*="/service/login"]');
-　await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-
-　// その後にSTAGE 2を継続
   
-  // STAGE 2: フォーム要素が出現するまで待機
+  // STAGE 1.5: 最初のログインボタンクリック
+  console.log('STAGE 1.5: 最初のログインボタンクリック');
+  await page.waitForSelector('a.login-btn.btn.btn-info[href*="/service/login"]', { timeout: 10000 });
+  await page.click('a.login-btn.btn.btn-info[href*="/service/login"]');
+  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+  
+  // STAGE 2: フォーム要素が出現するまで待機（修正されたセレクタ）
   console.log('STAGE 2: ログインフォーム要素の待機');
-  await page.waitForSelector('#userid', { timeout: 20000 });
-  await page.waitForSelector('#password', { timeout: 20000 });
-  await page.waitForSelector('#login_button', { timeout: 20000 });
+  await page.waitForSelector('input[name="id"]', { timeout: 20000 });
+  await page.waitForSelector('input[name="password"]', { timeout: 20000 });
+  await page.waitForSelector('button#login_button', { timeout: 20000 });
   
-  // STAGE 3: ID/パスワード入力
+  // STAGE 3: ID/パスワード入力（入力前にクリア）
   console.log('STAGE 3: ID/パスワード入力');
-  await page.type('#userid', uid, { delay: 40 });
-  await page.type('#password', pw, { delay: 40 });
+  
+  // IDフィールドをクリアして入力
+  await page.focus('input[name="id"]');
+  await page.keyboard.down('Control');
+  await page.keyboard.press('a');
+  await page.keyboard.up('Control');
+  await page.type('input[name="id"]', uid, { delay: 40 });
+  
+  // パスワードフィールドをクリアして入力
+  await page.focus('input[name="password"]');
+  await page.keyboard.down('Control');
+  await page.keyboard.press('a');
+  await page.keyboard.up('Control');
+  await page.type('input[name="password"]', pw, { delay: 40 });
   
   // STAGE 4: ログインボタンクリック
   console.log('STAGE 4: ログインボタンクリック');
-  await page.click('#login_button');
+  await page.click('button#login_button');
   
-  // STAGE 5: ログイン済み状態かURLベースで成功判定
+  // STAGE 5: ログイン成功判定（複数条件での並行待機）
   console.log('STAGE 5: ログイン成功判定');
   
-  // 複数の成功条件を並行して待機
   await Promise.race([
     page.waitForSelector('a[href*="/service/logout"]', { timeout: 30000 }),
     page.waitForFunction(() => location.href.includes('/vehicle/'), { timeout: 30000 })
   ]).catch(() => {
-    // タイムアウトの場合は現在の状態をチェック
     console.log('成功判定タイムアウト、現在状態を確認中...');
   });
   
@@ -219,7 +226,7 @@ if (!(await isLoggedIn())) {
 } else {
   console.log('既にログイン済み');
 }
-
+    
   // 会場選択ページへ
 console.log('会場選択ページへ移動中...');
 await page.goto('https://www.iauc.co.jp/vehicle/', { waitUntil: 'networkidle2' });
