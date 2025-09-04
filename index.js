@@ -340,27 +340,54 @@ await safeClick([
 await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
 
 // フリーワード検索タブ
-console.log('フリーワード検索実行中...');
-await safeClick(['#button_freeword_search', 'a#button_freeword_search', 'a[href="#freeword"]#button_freeword_search']);
+    console.log('フリーワード検索実行中...');
+    await safeClick(['#button_freeword_search', 'a#button_freeword_search', 'a[href="#freeword"]#button_freeword_search']);
 
-// 入力
-const freewordInputSel = ['input[name="freeword_search"]', 'input[name="freeword"]'];
-await safeClick(freewordInputSel, 20000); // 出現待ち
-const input = await page.$(freewordInputSel[0]) || await page.$(freewordInputSel[1]);
-await input.click();
-await page.keyboard.type(keyword, { delay: 30 });
+    // 入力フィールドが表示されるまで待機
+    console.log('入力フィールドの表示待機中...');
+    await page.waitForSelector('input[name="freeword"]', { timeout: 10000 });
 
-// 送信
-const submitSels = ['button[type="submit"]', 'input[value="検索"]', 'button[name="search"]', '#button_freeword_submit'];
-let hitSel = null; for (const s of submitSels) { if (await page.$(s)) { hitSel = s; break; } }
-if (hitSel) { await safeClick(hitSel); } else { await page.keyboard.press('Enter'); }
+    // キーワード入力
+    console.log('キーワード入力中:', keyword);
+    await page.focus('input[name="freeword"]');
+    await page.type('input[name="freeword"]', keyword, { delay: 50 });
 
-try {
-  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
-} catch { console.log('ナビゲーション待機タイムアウト（続行）'); }
+    // 検索実行
+    console.log('検索実行中...');
+    const searchButton = await page.$('button.button.corner-radius');
+    if (searchButton) {
+      await searchButton.click();
+    } else {
+      await page.keyboard.press('Enter');
+    }
 
-// 結果行が描画されるまで待つ（この行までが置き換え範囲）
-await page.waitForSelector('tbody tr', { timeout: 15000 }).catch(()=>{});
+    // 検索結果ページ遷移待機
+    try {
+      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+      console.log('検索結果ページに遷移完了');
+    } catch (error) {
+      console.log('ナビゲーション待機タイムアウト（続行）');
+    }
+
+    // 総件数取得
+    console.log('総件数を取得中...');
+    const totalCount = await page.evaluate(() => {
+      const countElements = Array.from(document.querySelectorAll('*')).filter(el => {
+        const text = el.textContent || '';
+        return /\d+件/.test(text) && el.children.length === 0;
+      });
+      
+      if (countElements.length > 0) {
+        const match = countElements[0].textContent.match(/(\d+)件/);
+        return match ? match[1] : null;
+      }
+      return null;
+    });
+
+    console.log('検索総件数:', totalCount);
+
+    // 結果行が描画されるまで待つ
+    await page.waitForSelector('tbody tr', { timeout: 15000 }).catch(()=>{});
 
 // 結果スクレイピング - より詳細な情報取得
 console.log('検索結果をスクレイピング中...');
