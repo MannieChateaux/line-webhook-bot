@@ -182,10 +182,9 @@ if (!(await isLoggedIn())) {
     if (hit) { hit.click(); return true; }
     return false;
   });
-  if (clicked) {
+ if (clicked) {
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {});
   } else {
-} else {
     // 直でログインURLへ
     await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
   }
