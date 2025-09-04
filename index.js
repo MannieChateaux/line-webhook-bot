@@ -189,9 +189,6 @@ if (!(await isLoggedIn())) {
     await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
   }
 
-// ログインフォーム（メイン/iframe）を掴む
-console.log('未ログイン。ログインページへ遷移します...');
-
 // 1) クリックに頼らず、まずは確実に直接遷移が一番確実
 await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'networkidle2' });
 
