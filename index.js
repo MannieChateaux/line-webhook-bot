@@ -38,7 +38,7 @@ app.post(
     payload: req.rawBody,
   })(req, res, next),
   async (req, res) => {
-     events = req.body.events;
+     const events = req.body.events;
     // 先に 200 を返す（重要）
     res.sendStatus(200);
     // 後処理は非同期で流す
@@ -419,6 +419,7 @@ return items;
 } finally {
   try { if (page) await page.close(); }   catch (e) { console.error(e); }
   try { if (browser) await browser.close(); } catch (e) { console.error(e); }
+}
 }
 
 
