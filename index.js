@@ -189,15 +189,46 @@ if (!(await isLoggedIn())) {
     await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
   }
 
- // ログインフォーム（メイン/iframe）を掴む
+// ログインフォーム（メイン/iframe）を掴む
+console.log('未ログイン。ログインページへ遷移します...');
+
+// 1) クリックに頼らず、まずは確実に直接遷移が一番確実
+await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'networkidle2' });
+
+// 2) 念のため、トップに「ログイン」ボタンが残っていればクリックして二重化（どちらでもOK）
+const topLoginLink = await page.$('a.login-btn.btn.btn-info[href*="/service/login"]');
+if (topLoginLink) {
+  try { await topLoginLink.click(); } catch {}
+  await sleep(400);
+}
+
+// 3) 「/service/login」を含むフレームが出るのを待つ（ページ遷移ではなくフレーム遷移）
+const loginFrame = await (async () => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < 20000) {
+    const hit = page.frames().find(f => /\/service\/login/i.test(f.url()));
+    if (hit) return hit;
+    await sleep(300);
+  }
+  return null;
+})();
+
+// デバッグ出力（どのフレームがあるか）
+try {
+  console.log('login frames:', page.frames().map(fr => fr.url()));
+  const preview = await page.evaluate(() => (document.body?.innerText || '').slice(0, 500));
+  console.log('login body preview:', preview);
+} catch {}
+
+// 4) もしフレームが取れなければ、もう一度ダイレクト遷移で読み込ける
+if (!loginFrame) {
+  await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
+  await sleep(500);
+}
+
+// 5) ← この直後の既存コード
 const target = await findLoginTarget(20000);
 if (!target || !target.passSel) {
-  try {
-    console.log('login frames:', page.frames().map(fr => fr.url()));
-    await page.screenshot({ path: '/tmp/login_screen.png', fullPage: true }).catch(()=>{});
-    const bodyPreview = await page.evaluate(() => (document.body?.innerText || '').slice(0, 500));
-    console.log('login body preview:', bodyPreview);
-  } catch {}
   throw new Error('ログインフォームが見つかりませんでした');
 }
 
@@ -206,7 +237,23 @@ const { frame: f, userSel, passSel, submitSel } = target;
 if (userSel) await f.type(userSel, uid, { delay: 40 });
 await f.type(passSel, pw, { delay: 40 });
 
-if (submitSel) { await f.click(submitSel); } else { await f.keyboard.press('Enter'); }
+// ログインボタンクリック（強化版）
+if (submitSel) { 
+    try {
+        await f.click(submitSel);
+        console.log('通常クリックでログイン送信成功');
+    } catch {
+        // JavaScriptクリックで再試行
+        await f.evaluate((sel) => {
+            const btn = document.querySelector(sel);
+            if (btn && btn.onclick) btn.onclick();
+            else if (btn) btn.click();
+        }, submitSel);
+        console.log('JavaScriptクリックでログイン送信成功');
+    }
+} else { 
+    await f.keyboard.press('Enter'); 
+}
 
 await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {});
 console.log('ログイン遷移後 URL:', page.url());
@@ -215,7 +262,6 @@ if (!(await isLoggedIn())) {
   throw new Error('ログインに失敗しました（ログアウトリンクが見つかりません）');
 } else {
   console.log('ログイン完了！');
-}
 }
 
   // 会場選択ページへ
