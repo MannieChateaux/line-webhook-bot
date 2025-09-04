@@ -113,15 +113,6 @@ async function fetchIaucResults({ keyword }) {
       executablePath: execPath,
     });
 
-    try {
-        browser = await puppeteer.launch({
-            // ... 既存のlaunch設定
-        });
-        
-        page = await browser.newPage();
-        // ... 既存のpage設定
-        
-        // ここから116行目以降のログイン処理を配置
     page = await browser.newPage();
     page.setDefaultNavigationTimeout(60000);
     page.setDefaultTimeout(60000);
