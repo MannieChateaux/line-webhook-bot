@@ -339,28 +339,106 @@ await safeClick([
 ], 30000);
 await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
 
-// フリーワード検索タブ
+// フリーワード検索タブ - デバッグ強化版
     console.log('フリーワード検索実行中...');
+    
+    // 現在のページ状態をデバッグ
+    const currentUrl = page.url();
+    console.log('現在のURL:', currentUrl);
+    
+    // フリーワード検索タブクリック前の状態確認
+    const tabExists = await page.evaluate(() => {
+      const tab = document.querySelector('#button_freeword_search');
+      return {
+        exists: !!tab,
+        visible: tab ? tab.offsetParent !== null : false,
+        text: tab ? tab.textContent : null
+      };
+    });
+    console.log('フリーワード検索タブ状態:', tabExists);
+    
+    // タブクリック実行
     await safeClick(['#button_freeword_search', 'a#button_freeword_search', 'a[href="#freeword"]#button_freeword_search']);
-
-    // 入力フィールドが表示されるまで待機
-    console.log('入力フィールドの表示待機中...');
-    await page.waitForSelector('input[name="freeword"]', { timeout: 10000 });
-
-    // キーワード入力
-    console.log('キーワード入力中:', keyword);
-    await page.focus('input[name="freeword"]');
-    await page.type('input[name="freeword"]', keyword, { delay: 50 });
-
+    
+    // クリック後の待機
+    await sleep(1000);
+    
+    // 入力フィールド候補を全て確認
+    console.log('入力フィールド候補を確認中...');
+    const inputFields = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input'));
+      return inputs.map(input => ({
+        name: input.name,
+        type: input.type,
+        id: input.id,
+        className: input.className,
+        visible: input.offsetParent !== null,
+        placeholder: input.placeholder
+      }));
+    });
+    console.log('見つかった入力フィールド:', inputFields);
+    
+    // フリーワード入力フィールドを複数候補で試行
+    const freewordSelectors = [
+      'input[name="freeword"]',
+      'input[name="freeword_search"]', 
+      'input[type="text"]',
+      '#freeword',
+      '.freeword-input'
+    ];
+    
+    let inputFound = false;
+    for (const selector of freewordSelectors) {
+      const element = await page.$(selector);
+      if (element) {
+        console.log('入力フィールド発見:', selector);
+        
+        // キーワード入力
+        console.log('キーワード入力中:', keyword);
+        await page.focus(selector);
+        await page.type(selector, keyword, { delay: 50 });
+        inputFound = true;
+        break;
+      }
+    }
+    
+    if (!inputFound) {
+      console.log('入力フィールドが見つかりません。ページのスクリーンショットを保存...');
+      await page.screenshot({ path: '/tmp/freeword_input_error.png', fullPage: true }).catch(() => {});
+      throw new Error('フリーワード入力フィールドが見つかりません');
+    }
+    
     // 検索実行
     console.log('検索実行中...');
     const searchButton = await page.$('button.button.corner-radius');
     if (searchButton) {
       await searchButton.click();
     } else {
-      await page.keyboard.press('Enter');
+      // 他の検索ボタン候補も試行
+      const buttonSelectors = [
+        'button[type="submit"]',
+        'input[value="検索"]',
+        'button:contains("検索")',
+        '.search-button'
+      ];
+      
+      let buttonFound = false;
+      for (const btnSelector of buttonSelectors) {
+        const btn = await page.$(btnSelector);
+        if (btn) {
+          console.log('検索ボタン発見:', btnSelector);
+          await btn.click();
+          buttonFound = true;
+          break;
+        }
+      }
+      
+      if (!buttonFound) {
+        console.log('検索ボタンが見つからないため、Enterキーで実行');
+        await page.keyboard.press('Enter');
+      }
     }
-
+    
     // 検索結果ページ遷移待機
     try {
       await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
@@ -368,27 +446,10 @@ await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
     } catch (error) {
       console.log('ナビゲーション待機タイムアウト（続行）');
     }
-
-    // 総件数取得
-    console.log('総件数を取得中...');
-    const totalCount = await page.evaluate(() => {
-      const countElements = Array.from(document.querySelectorAll('*')).filter(el => {
-        const text = el.textContent || '';
-        return /\d+件/.test(text) && el.children.length === 0;
-      });
-      
-      if (countElements.length > 0) {
-        const match = countElements[0].textContent.match(/(\d+)件/);
-        return match ? match[1] : null;
-      }
-      return null;
-    });
-
-    console.log('検索総件数:', totalCount);
-
+    
     // 結果行が描画されるまで待つ
     await page.waitForSelector('tbody tr', { timeout: 15000 }).catch(()=>{});
-
+    
 // 結果スクレイピング - より詳細な情報取得
 console.log('検索結果をスクレイピング中...');
 const items = await page.evaluate(() => {
