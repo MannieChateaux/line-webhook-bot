@@ -146,7 +146,7 @@ if (!(await isLoggedIn())) {
   
   // STAGE 1: ログインページに直接アクセス
   console.log('STAGE 1: ログインページへ直接アクセス');
-  await page.goto('https://www.iauc.co.jp/service/login', { waitUntil: 'domcontentloaded' });
+  await page.goto('https://www.iauc.co.jp/service/', { waitUntil: 'domcontentloaded' });
   
   // STAGE 1.5: 最初のログインボタンクリック
   console.log('STAGE 1.5: 最初のログインボタンクリック');
