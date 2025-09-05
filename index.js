@@ -567,71 +567,169 @@ async function fetchIaucResults({ keyword }) {
       console.log('検索結果テーブル待機タイムアウト');
     }
 
-    // 結果スクレイピング - エラー耐性強化版
-    console.log('検索結果をスクレイピング中...');
-    const items = await page.evaluate(() => {
-      const rows = Array.from(document.querySelectorAll('tbody tr'));
-      console.log('見つかった行数:', rows.length);
-      if (rows.length <= 1) return [];
-
-      return rows.slice(1, 6).map((row, index) => {
-        const cells = Array.from(row.querySelectorAll('td'));
-        const cellTexts = cells.map(cell => (cell.textContent || '').trim());
-
-        // 画像URL
-        const imgElement  = row.querySelector('img');
-        const imageUrl    = imgElement ? (imgElement.src || '') : '';
-
-        // 詳細URL
-        const linkElement = row.querySelector('a[href*="detail"], a[href*="vehicle"]');
-        const url         = linkElement ? (linkElement.href || '') : '';
-
-        // 車名・グレード（3〜5列目あたりから推測）
-        let title = '';
-        let grade = '';
-        for (let i = 2; i < Math.min(cells.length, 6); i++) {
-          const text = cellTexts[i];
-          if (!text) continue;
-          const looksNumber = /^\d+$/.test(text);
-          const looksMoney  = text.includes('円');
-          const looksKm     = text.includes('km');
-          if (!title && !looksNumber && !looksMoney && !looksKm) {
-            title = text;
-          } else if (!grade && text !== title && !looksNumber && !looksMoney && !looksKm) {
-            grade = text;
+    // 「結果」ボタンをクリックしてフィルタダイアログを開く
+    console.log('「結果」ボタンをクリック中...');
+    const resultButtonSelectors = [
+      'a.narrow_button.result',
+      '[data-element="transactionStatusId"]',
+      'a[title*="絞り込み"]'
+    ];
+    
+    let resultButtonFound = false;
+    for (const selector of resultButtonSelectors) {
+      const resultButton = await page.$(selector);
+      if (resultButton) {
+        console.log('結果ボタン発見:', selector);
+        await resultButton.click();
+        resultButtonFound = true;
+        break;
+      }
+    }
+    
+    if (!resultButtonFound) {
+      console.log('結果ボタンが見つかりません');
+    }
+    
+    // フィルタダイアログの待機
+    await sleep(2000);
+    
+    // 業販車のみ選択（仮出品・未せり・申込可）
+    console.log('業販車フィルタを選択中...');
+    
+    await page.evaluate(() => {
+      // 全てのチェックボックスを一旦クリア
+      const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+      checkboxes.forEach(cb => {
+        if (cb.checked) cb.click();
+      });
+      
+      // 必要な項目のみ選択
+      const targetLabels = ['仮出品', '未せり', '申込可'];
+      
+      for (const label of targetLabels) {
+        // ラベルテキストから該当するチェックボックスを探す
+        const labels = Array.from(document.querySelectorAll('label'));
+        const targetLabel = labels.find(l => l.textContent && l.textContent.includes(label));
+        
+        if (targetLabel) {
+          // ラベルに対応するチェックボックスを探す
+          const checkbox = targetLabel.querySelector('input[type="checkbox"]') ||
+                          document.querySelector(`input[id="${targetLabel.getAttribute('for')}"]`);
+          
+          if (checkbox && !checkbox.checked) {
+            checkbox.click();
+            console.log(`${label} を選択しました`);
           }
         }
-
-        // その他の属性をざっくり抽出
-        let district = '', year = '', km = '', color = '', shift = '', rating = '', price = '';
-
-        for (const text of cellTexts) {
-          if (!price  && (text.includes('万円') || text.includes('円'))) price = text;
-          if (!km     && text.includes('km')) km = text;
-          if (!year   && ( /H\d{2}年/.test(text) || /20\d{2}年/.test(text) || /\d{2}年/.test(text) )) year = text;
-          if (!shift  && ( text === 'MT' || text === 'AT' || text === 'CVT' || text.includes('速') )) shift = text;
-          if (!rating && !text.includes('km') && !text.includes('円') && ( /^[0-9.]+$/.test(text) || text.includes('点') )) rating = text;
-          if (!color  && text.length <= 5 && !/^\d+$/.test(text) && !['MT','AT','CVT'].includes(text)) color = text;
-          if (!district && !/^\d+$/.test(text) && (text.includes('県') || text.includes('市') || text.length <= 4)) district = text;
+      }
+    });
+    
+    // OKボタンをクリック
+    console.log('OKボタンをクリック中...');
+    const okButtonSelectors = [
+      'button:contains("OK")',
+      'input[value="OK"]',
+      '.btn:contains("OK")',
+      'button.btn'
+    ];
+    
+    let okButtonFound = false;
+    for (const selector of okButtonSelectors) {
+      try {
+        if (selector.includes(':contains')) {
+          const buttons = await page.$$('button, input[type="submit"]');
+          for (const button of buttons) {
+            const text = await page.evaluate(btn => btn.textContent || btn.value, button);
+            if (text && text.includes('OK')) {
+              await button.click();
+              okButtonFound = true;
+              console.log('OKボタンクリック完了');
+              break;
+            }
+          }
+        } else {
+          const okBtn = await page.$(selector);
+          if (okBtn) {
+            await okBtn.click();
+            okButtonFound = true;
+            console.log('OKボタンクリック完了:', selector);
+            break;
+          }
         }
-
-        return {
-          title:  title || `車両 ${index + 1}`,
-          grade,
-          district,
-          year,
-          km:     km || '走行距離情報なし',
-          color,
-          shift,
-          rating,
-          price:  price || '価格情報なし',
-          imageUrl,
-          url
-        };
-      });
+        if (okButtonFound) break;
+      } catch (e) {
+        console.log('OKボタンセレクタ失敗:', selector);
+      }
+    }
+    
+    if (!okButtonFound) {
+      console.log('OKボタンが見つからないため、Enterキーで確定');
+      await page.keyboard.press('Enter');
+    }
+    
+    // フィルタ適用後の待機
+    await sleep(3000);
+    
+    // 正確なセレクタでスクレイピング実行
+    console.log('正確なセレクタで業販車情報をスクレイピング中...');
+    const items = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('tbody tr'));
+      console.log('フィルタ後の行数:', rows.length);
+      
+      if (rows.length <= 1) return [];
+      
+      const vehicles = [];
+      
+      for (let i = 1; i < rows.length && vehicles.length < 10; i++) {
+        const row = rows[i];
+        
+        // 各データを正確なセレクタで取得
+        const vehicleName = row.querySelector('[data-element="vehicleName"]')?.textContent?.trim() || '';
+        const grade = row.querySelector('[data-element="grade"]')?.textContent?.trim() || '';
+        const sfield = row.querySelector('[data-element="sfield"]')?.textContent?.trim() || '';
+        const district = row.querySelector('[data-element="district"]')?.textContent?.trim() || '';
+        const modelYear = row.querySelector('[data-element="modelOfYear"]')?.textContent?.trim() || '';
+        const type = row.querySelector('[data-element="type"]')?.textContent?.trim() || '';
+        const mileage = row.querySelector('[data-element="mileage"]')?.textContent?.trim() || '';
+        const startPrice = row.querySelector('[data-element="startPrice"]')?.textContent?.trim() || '';
+        const transactionStatus = row.querySelector('[data-element="transactionStatusId"]')?.textContent?.trim() || '';
+        
+        // 車両画像
+        const imgElement = row.querySelector('img.img-car.lazy-table.visited');
+        const imageUrl = imgElement ? imgElement.src : '';
+        
+        // 詳細リンク（data-lid属性から構築）
+        const dataLid = row.getAttribute('data-lid');
+        const url = dataLid ? `https://www.iauc.co.jp/vehicle/detail/${dataLid}` : '';
+        
+        // 価格から数値抽出（ソート用）
+        const priceMatch = startPrice.match(/(\d+(?:\.\d+)?)/);
+        const priceNum = priceMatch ? parseFloat(priceMatch[1]) : 999999;
+        
+        vehicles.push({
+          title: vehicleName || `車両 ${vehicles.length + 1}`,
+          grade: grade,
+          sfield: sfield,
+          district: district,
+          year: modelYear,
+          type: type,
+          km: mileage || '走行距離情報なし',
+          price: startPrice || '価格情報なし',
+          status: transactionStatus,
+          imageUrl: imageUrl,
+          url: url,
+          priceNum: priceNum
+        });
+      }
+      
+      // 価格順でソート（安い順）
+      vehicles.sort((a, b) => a.priceNum - b.priceNum);
+      
+      console.log('スクレイピング完了:', vehicles.length, '件');
+      return vehicles.slice(0, 5); // 上位5件のみ
     });
 
-    console.log('スクレイピング完了 件数:', items.length);
+    console.log('業販車スクレイピング完了 件数:', items.length);
     return items;
   
   } catch (error) {
