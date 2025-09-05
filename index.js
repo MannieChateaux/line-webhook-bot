@@ -428,19 +428,21 @@ async function fetchIaucResults({ keyword }) {
       '.page-next-button'
     ], 45000);
 
-    if (nextSuccess) {
+   if (nextSuccess) {
       // ナビゲーション待機（エラー耐性あり）
       try {
         await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 });
         console.log('次へボタン後の遷移完了');
       } catch (navError) {
         console.log('次へボタン後の遷移待機タイムアウト、処理継続');
-        await sleep(3000);
       }
+      // フリーワード検索タブが表示されるまで十分待機
+      await sleep(10000);
+      console.log('フリーワード検索タブ表示待機完了');
     } else {
       console.log('次へボタンが見つからない、現在のページで処理継続');
     }
-
+    
     // フリーワード検索タブ - 改良版
     console.log('フリーワード検索実行中...');
     
@@ -448,7 +450,12 @@ async function fetchIaucResults({ keyword }) {
     const currentUrl2 = page.url();
     console.log('フリーワード検索前URL:', currentUrl2);
     
-    // フリーワード検索タブクリック
+    // フリーワード検索タブクリック（より確実な待機付き）
+    console.log('フリーワード検索タブ要素確認中...');
+    await page.waitForSelector('#button_freeword_search', { timeout: 20000 }).catch(() => {
+      console.log('フリーワード検索タブ待機タイムアウト');
+    });
+    
     const freewordTabSuccess = await safeClick([
       '#button_freeword_search', 
       'a#button_freeword_search', 
