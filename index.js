@@ -163,6 +163,23 @@ async function fetchIaucResults({ keyword }) {
       }
     }
 
+   // 既存セッション強制クリア（同時ログイン対策）
+    console.log('既存セッションクリア中...');
+    try {
+      // Cookieクリア
+      await page.deleteCookie(...(await page.cookies()));
+      
+      // LocalStorage/SessionStorageクリア
+      await page.evaluate(() => {
+        localStorage.clear();
+        sessionStorage.clear();
+      });
+      
+      console.log('セッションクリア完了');
+    } catch (e) {
+      console.log('セッションクリア中にエラー:', e.message);
+    }
+    
     if (!(await isLoggedIn())) {
       console.log('2段階ログイン処理開始...');
       
@@ -258,8 +275,8 @@ async function fetchIaucResults({ keyword }) {
     
     console.log('現在のページURL:', page.url(), 'title:', await page.title());
 
-    // より安全な待機処理
-    await sleep(2000);
+   // セッション安定化のため長めに待機（同時ログイン対策）
+    await sleep(10000);
 
 // --- お知らせ/モーダル自動クローズ → 検索UIへ復旧 ---
     console.log('お知らせ画面・モーダルの確認中...');
