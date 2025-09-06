@@ -1,6 +1,5 @@
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
-const axios = require('axios');
 const puppeteer = require('puppeteer');
 
 // 環境変数
@@ -24,15 +23,17 @@ app.use(express.json({
 
 // セッション保持用
 const sessions = new Map();
-const FIELDS = ['maker','model','budget','mileage'];
+const FIELDS = ['maker','model','grade','type','budget','mileage'];
 const QUESTIONS = {
-  maker:   '🚗 メーカーを教えてください（例：トヨタ、スバル）',
-  model:   '🚗 車名を教えてください（例：ヤリス、サンバー）',
-  budget:  '💰 予算を教えてください（例：50万、200万）',
-  mileage: '📏 走行距離上限を教えてください（例：1万km、5万km）',
+  maker:   '🚗 メーカーを教えてください\n（例：スバル、アルファロメオ、ランチア）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
+  model:   '🚗 車名を教えてください\n（例：インプレッサ、155、デルタ）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
+  grade:   '⭐ グレードを教えてください\n（例：WRX、V6 TI、インテグラーレエヴォルツィオーネ）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
+  type:    '📋 型式を教えてください\n（例：GC8、167A1E、L31E5）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
+  budget:  '💰 予算上限を教えてください\n（例：100万円、500万円）\n\n🔄 最初からやり直す場合は「戻る」と入力',
+  mileage: '📏 走行距離上限を教えてください\n（例：3万km、10万km）\n\n🔄 最初からやり直す場合は「戻る」と入力',
 };
 
-// Webhook 受け口：署名検証→ハンドラ
+// Webhook 受け口
 app.post(
   '/webhook',
   (req, res, next) => middleware({
@@ -49,38 +50,46 @@ app.post(
 // 数値変換ヘルパー
 function toNumberYen(text) {
   if (!text) return '';
-  const t = String(text).replace(/[^\d万]/g, '');
-  if (!t) return '';
-  if (t.endsWith('万')) {
-    const n = parseInt(t.replace('万', ''), 10);
-    return isNaN(n) ? '' : String(n * 10000);
+  const cleaned = text.replace(/[^\d万円]/g, '');
+  const match = cleaned.match(/(\d+)万/);
+  if (match) {
+    return String(parseInt(match[1], 10) * 10000);
   }
-  return String(parseInt(t, 10) || '');
+  const numMatch = cleaned.match(/\d+/);
+  return numMatch ? numMatch[0] : '';
 }
 
 function toNumberKm(text) {
   if (!text) return '';
-  const t = String(text).replace(/[^\d万]/g, '');
-  if (!t) return '';
-  if (t.endsWith('万')) {
-    const n = parseInt(t.replace('万', ''), 10);
-    return isNaN(n) ? '' : String(n * 10000);
+  const cleaned = text.replace(/[^\d万千km]/g, '');
+  
+  // 「3万km」形式
+  const manMatch = cleaned.match(/(\d+)万/);
+  if (manMatch) {
+    return String(parseInt(manMatch[1], 10) * 10000);
   }
-  return String(parseInt(t, 10) || '');
+  
+  // 「30千km」形式（IAucの特殊表記）
+  const senMatch = cleaned.match(/(\d+)千/);
+  if (senMatch) {
+    return String(parseInt(senMatch[1], 10) * 1000);
+  }
+  
+  // 純粋な数値
+  const numMatch = cleaned.match(/\d+/);
+  return numMatch ? numMatch[0] : '';
 }
 
-// IAuc 実データ取得関数 - 改善版
-async function fetchIaucResults({ maker, model, budget, mileage }) {
-  console.log('🔍 fetchIaucResults開始:', { maker, model, budget, mileage });
+// IAuc検索関数
+async function searchIauc({ maker, model, grade, type, budget, mileage }) {
+  console.log('🔍 IAuc検索開始:', { maker, model, grade, type, budget, mileage });
   
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath();
-  console.log('📍 Using Chrome at:', execPath);
-
   let browser;
   let page;
   
   try {
-    console.log('🚀 Puppeteerブラウザ起動中...');
+    console.log('🚀 ブラウザ起動中...');
     browser = await puppeteer.launch({
       headless: 'new',
       args: [
@@ -93,7 +102,6 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
       executablePath: execPath,
     });
 
-    console.log('📄 新しいページを作成中...');
     page = await browser.newPage();
     page.setDefaultNavigationTimeout(60000);
     page.setDefaultTimeout(60000);
@@ -104,24 +112,21 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP,ja;q=0.9' });
     await page.setViewport({ width: 1280, height: 800 });
 
-    // 1) サイトにアクセス
-    console.log('🌐 IAucサイトにアクセス中...');
+    // 1) IAucサイトアクセス
+    console.log('🌐 IAucにアクセス中...');
     await page.goto('https://www.iauc.co.jp/', { waitUntil: 'domcontentloaded' });
-    console.log('✅ ページロード完了');
-    
-    // 待機時間を追加
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
     // 2) ログイン処理
-    console.log('🔐 ログイン処理を開始...');
+    console.log('🔐 ログイン処理...');
     
     // ログインリンクを探してクリック
-    const loginLink = await page.evaluate(() => {
+    const loginClicked = await page.evaluate(() => {
       const links = Array.from(document.querySelectorAll('a'));
       const loginLink = links.find(link => {
-        const text = link.textContent || '';
-        const href = link.href || '';
-        return text.includes('ログイン') || href.includes('login');
+        const text = (link.textContent || '').toLowerCase();
+        const href = (link.href || '').toLowerCase();
+        return text.includes('ログイン') || text.includes('login') || href.includes('login');
       });
       if (loginLink) {
         loginLink.click();
@@ -130,265 +135,126 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
       return false;
     });
     
-    if (loginLink) {
-      console.log('✅ ログインリンクをクリック');
-      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+    if (loginClicked) {
+      console.log('✅ ログインページへ遷移');
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
-    
-    // ログインフォームの入力
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
+
+    // ログイン情報入力
     const uid = process.env.IAUC_USER_ID;
     const pw = process.env.IAUC_PASSWORD;
     
     if (!uid || !pw) {
-      throw new Error('IAUC_USER_ID / IAUC_PASSWORD not set');
+      throw new Error('IAUC認証情報が未設定です');
     }
 
-    // ユーザーID入力（複数パターン試行）
-    const userFieldFilled = await page.evaluate((userId) => {
-      const selectors = [
-        '#userid', 'input[name="userid"]', 'input[name="user_id"]',
-        'input[type="text"]', 'input[placeholder*="ID"]'
-      ];
-      
-      for (const selector of selectors) {
-        const field = document.querySelector(selector);
-        if (field && field.type !== 'hidden') {
-          field.value = userId;
-          field.dispatchEvent(new Event('input', { bubbles: true }));
-          return true;
-        }
+    // ID入力
+    await page.evaluate((userId) => {
+      const inputs = document.querySelectorAll('input[type="text"], input[name*="user"], input[name*="id"]');
+      if (inputs.length > 0) {
+        inputs[0].value = userId;
+        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
       }
-      return false;
     }, uid);
-    
-    if (userFieldFilled) {
-      console.log('✅ ユーザーID入力完了');
-    }
 
     // パスワード入力
-    const passFieldFilled = await page.evaluate((password) => {
-      const field = document.querySelector('input[type="password"]');
-      if (field) {
-        field.value = password;
-        field.dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
+    await page.evaluate((password) => {
+      const pwInput = document.querySelector('input[type="password"]');
+      if (pwInput) {
+        pwInput.value = password;
+        pwInput.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      return false;
     }, pw);
-    
-    if (passFieldFilled) {
-      console.log('✅ パスワード入力完了');
-    }
 
-    // ログインボタンクリック
-    const loginClicked = await page.evaluate(() => {
-      // ボタンまたは送信要素を探す
-      const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-      const loginBtn = buttons.find(btn => {
-        const text = (btn.textContent || btn.value || '').toLowerCase();
-        return text.includes('ログイン') || text.includes('login');
-      });
-      
-      if (loginBtn) {
-        loginBtn.click();
-        return true;
+    // ログイン実行
+    await page.evaluate(() => {
+      const submitBtn = document.querySelector('input[type="submit"], button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.click();
+      } else {
+        const form = document.querySelector('form');
+        if (form) form.submit();
       }
-      
-      // フォーム送信も試す
-      const form = document.querySelector('form');
-      if (form) {
-        form.submit();
-        return true;
-      }
-      
-      return false;
     });
-    
-    if (loginClicked) {
-      console.log('✅ ログインボタンクリック');
-      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-    }
-    
-    console.log('🌐 ログイン後のURL:', page.url());
+
+    console.log('⏳ ログイン完了待機...');
+    await page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
     await new Promise(resolve => setTimeout(resolve, 3000));
 
     // 3) 検索ページへ移動
-    console.log('🔍 検索ページを探索中...');
+    console.log('🔍 検索ページへ移動...');
     
-    // 検索ページへの直接アクセスを試みる
+    // 検索ページURLを試行
     const searchUrls = [
       'https://www.iauc.co.jp/vehicle/search',
       'https://www.iauc.co.jp/search',
-      'https://www.iauc.co.jp/vehicle',
-      'https://www.iauc.co.jp/member/search'
+      'https://www.iauc.co.jp/inquiry/confirm.php'  // PDFで見た実際のURL
     ];
     
-    let searchPageFound = false;
     for (const url of searchUrls) {
       try {
-        console.log(`🔗 試行中: ${url}`);
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await page.goto(url, { waitUntil: 'domcontentloaded' });
         await new Promise(resolve => setTimeout(resolve, 2000));
         
-        // 検索フォームの存在確認
-        const hasSearchForm = await page.evaluate(() => {
-          return document.querySelectorAll('input, select').length > 2;
+        const hasForm = await page.evaluate(() => {
+          return document.querySelectorAll('input, select').length > 0;
         });
         
-        if (hasSearchForm) {
+        if (hasForm) {
           console.log('✅ 検索フォーム発見:', url);
-          searchPageFound = true;
           break;
         }
       } catch (e) {
-        console.log(`⚠️ ${url} へのアクセス失敗`);
+        console.log(`⚠️ ${url} 試行失敗`);
       }
     }
 
-    // 4) 検索条件入力（より柔軟に）
-    console.log('📝 検索条件を入力中...');
+    // 4) フリーワード検索フィールドに入力
+    console.log('📝 検索条件入力...');
     
-    // デバッグ: 現在のページ構造を確認
-    const pageStructure = await page.evaluate(() => {
-      const inputs = Array.from(document.querySelectorAll('input')).map(el => ({
-        type: el.type,
-        name: el.name,
-        id: el.id,
-        placeholder: el.placeholder,
-        value: el.value
-      }));
-      
-      const selects = Array.from(document.querySelectorAll('select')).map(el => ({
-        name: el.name,
-        id: el.id,
-        optionsCount: el.options.length,
-        firstOptions: Array.from(el.options).slice(0, 5).map(opt => opt.textContent)
-      }));
-      
-      return { inputs, selects };
-    });
+    // フリーワード検索用のキーワードを構築
+    const keywords = [];
+    if (maker && maker !== 'パス') keywords.push(maker);
+    if (model && model !== 'パス') keywords.push(model);
+    if (grade && grade !== 'パス') keywords.push(grade);
+    if (type && type !== 'パス') keywords.push(type);
     
-    console.log('📋 ページ構造:', JSON.stringify(pageStructure, null, 2));
+    const searchKeyword = keywords.join(' ');
+    console.log('🔍 検索キーワード:', searchKeyword);
 
-    // メーカー入力を試みる
-    if (maker) {
-      const makerSet = await page.evaluate((makerName) => {
-        // テキスト入力フィールドを探す
-        const textInputs = Array.from(document.querySelectorAll('input[type="text"]'));
-        for (const input of textInputs) {
-          const label = input.placeholder || input.name || '';
-          if (label.includes('メーカー') || label.includes('maker')) {
-            input.value = makerName;
+    if (searchKeyword) {
+      // フリーワード入力欄を探して入力
+      const keywordEntered = await page.evaluate((keyword) => {
+        // 複数のパターンで検索欄を探す
+        const selectors = [
+          'input[name*="keyword"]',
+          'input[name*="freeword"]',
+          'input[placeholder*="キーワード"]',
+          'input[placeholder*="フリーワード"]',
+          'input[type="text"]'  // 最後の手段
+        ];
+        
+        for (const selector of selectors) {
+          const input = document.querySelector(selector);
+          if (input) {
+            input.value = keyword;
             input.dispatchEvent(new Event('input', { bubbles: true }));
-            return true;
-          }
-        }
-        
-        // セレクトボックスを探す
-        const selects = Array.from(document.querySelectorAll('select'));
-        for (const select of selects) {
-          const options = Array.from(select.options);
-          const match = options.find(opt => 
-            opt.textContent.includes(makerName)
-          );
-          if (match) {
-            select.value = match.value;
-            select.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
-          }
-        }
-        
-        // フリーワード欄があれば使う
-        const freewordInput = document.querySelector('input[name*="keyword"], input[name*="freeword"], input[placeholder*="キーワード"]');
-        if (freewordInput) {
-          freewordInput.value = makerName;
-          freewordInput.dispatchEvent(new Event('input', { bubbles: true }));
-          return true;
-        }
-        
-        return false;
-      }, maker);
-      
-      console.log(`メーカー「${maker}」入力: ${makerSet ? '成功' : '失敗'}`);
-    }
-
-    // モデル入力を試みる
-    if (model) {
-      const modelSet = await page.evaluate((modelName, existingMaker) => {
-        // 既存のフリーワード欄に追記
-        const freewordInput = document.querySelector('input[name*="keyword"], input[name*="freeword"], input[placeholder*="キーワード"]');
-        if (freewordInput) {
-          if (freewordInput.value && !freewordInput.value.includes(modelName)) {
-            freewordInput.value += ' ' + modelName;
-          } else if (!freewordInput.value) {
-            freewordInput.value = modelName;
-          }
-          freewordInput.dispatchEvent(new Event('input', { bubbles: true }));
-          return true;
-        }
-        
-        // モデル専用フィールドを探す
-        const modelInputs = Array.from(document.querySelectorAll('input[type="text"]'));
-        for (const input of modelInputs) {
-          const label = input.placeholder || input.name || '';
-          if (label.includes('車種') || label.includes('model')) {
-            input.value = modelName;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            return true;
-          }
-        }
-        
-        return false;
-      }, model, maker);
-      
-      console.log(`モデル「${model}」入力: ${modelSet ? '成功' : '失敗'}`);
-    }
-
-    // 予算入力
-    if (budget) {
-      const budgetNum = toNumberYen(budget);
-      const budgetSet = await page.evaluate((amount) => {
-        const inputs = Array.from(document.querySelectorAll('input'));
-        for (const input of inputs) {
-          const label = (input.placeholder || input.name || '').toLowerCase();
-          if (label.includes('価格') || label.includes('予算') || label.includes('price') || label.includes('budget')) {
-            input.value = amount;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
+            console.log('✅ キーワード入力:', selector);
             return true;
           }
         }
         return false;
-      }, budgetNum);
+      }, searchKeyword);
       
-      console.log(`予算「${budget}」入力: ${budgetSet ? '成功' : '失敗'}`);
-    }
-
-    // 走行距離入力
-    if (mileage) {
-      const mileageNum = toNumberKm(mileage);
-      const mileageSet = await page.evaluate((distance) => {
-        const inputs = Array.from(document.querySelectorAll('input'));
-        for (const input of inputs) {
-          const label = (input.placeholder || input.name || '').toLowerCase();
-          if (label.includes('走行') || label.includes('距離') || label.includes('mileage') || label.includes('km')) {
-            input.value = distance;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            return true;
-          }
-        }
-        return false;
-      }, mileageNum);
-      
-      console.log(`走行距離「${mileage}」入力: ${mileageSet ? '成功' : '失敗'}`);
+      if (!keywordEntered) {
+        console.log('⚠️ フリーワード入力欄が見つかりません');
+      }
     }
 
     // 5) 検索実行
-    console.log('🔍 検索を実行中...');
-    
-    const searchExecuted = await page.evaluate(() => {
-      // 検索ボタンを探す
+    console.log('🔍 検索実行...');
+    await page.evaluate(() => {
       const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a'));
       const searchBtn = buttons.find(btn => {
         const text = (btn.textContent || btn.value || '').toLowerCase();
@@ -396,351 +262,322 @@ async function fetchIaucResults({ maker, model, budget, mileage }) {
       });
       
       if (searchBtn) {
-        if (searchBtn.tagName === 'A') {
-          searchBtn.click();
-        } else {
-          searchBtn.click();
-        }
-        return true;
+        searchBtn.click();
+      } else {
+        const form = document.querySelector('form');
+        if (form) form.submit();
       }
-      
-      // フォーム送信
-      const form = document.querySelector('form');
-      if (form) {
-        form.submit();
-        return true;
-      }
-      
-      return false;
     });
-    
-    if (searchExecuted) {
-      console.log('✅ 検索実行');
-      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-    }
-    
+
+    await page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // 6) 検索結果の取得
-    console.log('📊 検索結果を取得中...');
-    console.log('🌐 結果ページURL:', page.url());
+    // 6) 予算・走行距離でフィルタ（絞り込み画面がある場合）
+    console.log('🎯 絞り込み条件適用...');
     
-    // 結果ページの構造を調査
-    const resultStructure = await page.evaluate(() => {
-      // 様々なパターンで結果要素を探す
-      const patterns = [
-        { selector: '.result-item', name: 'result-item' },
-        { selector: '.search-result', name: 'search-result' },
-        { selector: '.vehicle-item', name: 'vehicle-item' },
-        { selector: '.car-item', name: 'car-item' },
-        { selector: 'article', name: 'article' },
-        { selector: '.list-item', name: 'list-item' },
-        { selector: 'tbody tr', name: 'table-row' },
-        { selector: '.card', name: 'card' },
-        { selector: '[class*="result"]', name: 'result-class' },
-        { selector: '[class*="vehicle"]', name: 'vehicle-class' },
-        { selector: '[class*="car"]', name: 'car-class' }
-      ];
-      
-      const found = [];
-      for (const pattern of patterns) {
-        const count = document.querySelectorAll(pattern.selector).length;
-        if (count > 0) {
-          found.push({ ...pattern, count });
+    // 予算フィルタ
+    if (budget) {
+      const budgetNum = toNumberYen(budget);
+      await page.evaluate((amount) => {
+        // 予算入力欄を探す
+        const inputs = Array.from(document.querySelectorAll('input'));
+        for (const input of inputs) {
+          const label = (input.placeholder || input.name || '').toLowerCase();
+          if (label.includes('予算') || label.includes('価格') || label.includes('price')) {
+            input.value = amount;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            break;
+          }
         }
-      }
+      }, budgetNum);
+    }
+
+    // 走行距離フィルタ
+    if (mileage) {
+      const mileageNum = toNumberKm(mileage);
       
-      return found;
+      // チェックボックス形式の場合（PDFの画像参照）
+      const checkboxSelected = await page.evaluate((distance) => {
+        // 走行距離のチェックボックスを探す
+        const labels = Array.from(document.querySelectorAll('label'));
+        for (const label of labels) {
+          const text = label.textContent || '';
+          if (text.includes('km') && text.includes(String(distance / 10000) + '万')) {
+            const checkbox = label.querySelector('input[type="checkbox"]');
+            if (checkbox) {
+              checkbox.checked = true;
+              checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+              return true;
+            }
+          }
+        }
+        return false;
+      }, mileageNum);
+      
+      if (!checkboxSelected) {
+        // 入力欄形式の場合
+        await page.evaluate((distance) => {
+          const inputs = Array.from(document.querySelectorAll('input'));
+          for (const input of inputs) {
+            const label = (input.placeholder || input.name || '').toLowerCase();
+            if (label.includes('走行') || label.includes('距離') || label.includes('mileage')) {
+              input.value = distance;
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              break;
+            }
+          }
+        }, mileageNum);
+      }
+    }
+
+    // 絞り込み実行（OKボタンなど）
+    await page.evaluate(() => {
+      const okBtn = Array.from(document.querySelectorAll('button, input')).find(btn => {
+        const text = (btn.textContent || btn.value || '');
+        return text === 'OK' || text === '絞り込み' || text === '検索';
+      });
+      if (okBtn) okBtn.click();
     });
     
-    console.log('🔍 発見した結果パターン:', resultStructure);
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // 最も有望なセレクタを使用してスクレイピング
-    let items = [];
+    // 7) 検索結果取得
+    console.log('📊 検索結果を取得中...');
     
-    if (resultStructure.length > 0) {
-      const bestSelector = resultStructure[0].selector;
-      console.log(`📋 セレクタ「${bestSelector}」を使用してスクレイピング`);
+    const results = await page.evaluate(() => {
+      // 様々なパターンで結果を探す
+      const items = [];
       
-      items = await page.evaluate((selector) => {
-        const elements = Array.from(document.querySelectorAll(selector)).slice(0, 10);
-        
-        return elements.map((el, index) => {
-          // テキストコンテンツを全て取得
-          const allText = el.textContent || '';
+      // テーブル形式の場合
+      const rows = document.querySelectorAll('tbody tr');
+      if (rows.length > 0) {
+        rows.forEach((row, index) => {
+          if (index === 0) return; // ヘッダー行スキップ
           
-          // タイトル抽出（最初の見出しまたは太字テキスト）
-          const titleEl = el.querySelector('h1, h2, h3, h4, h5, h6, strong, b, .title, .name');
+          const cells = row.querySelectorAll('td');
+          if (cells.length > 0) {
+            const text = row.textContent || '';
+            
+            // 各セルからデータ抽出
+            const title = cells[0]?.textContent?.trim() || `車両 ${index}`;
+            const priceMatch = text.match(/[\d,]+円/);
+            const price = priceMatch ? priceMatch[0] : '要確認';
+            const kmMatch = text.match(/[\d,]+千?km/i);
+            const km = kmMatch ? kmMatch[0] : '要確認';
+            
+            const link = row.querySelector('a');
+            const url = link ? link.href : '';
+            
+            items.push({ title, price, km, url, imageUrl: '' });
+          }
+        });
+      }
+      
+      // リスト形式の場合
+      if (items.length === 0) {
+        const listItems = document.querySelectorAll('.result-item, .vehicle-item, .car-item, li');
+        listItems.forEach((item, index) => {
+          const text = item.textContent || '';
+          const titleEl = item.querySelector('h2, h3, h4, .title, .name');
           const title = titleEl ? titleEl.textContent.trim() : `車両 ${index + 1}`;
           
-          // 価格抽出（円を含むテキスト）
-          const priceMatch = allText.match(/[\d,]+円/);
-          const price = priceMatch ? priceMatch[0] : '価格情報なし';
-          
-          // 走行距離抽出（kmを含むテキスト）
-          const kmMatch = allText.match(/[\d,]+km/i);
-          const km = kmMatch ? kmMatch[0] : '走行距離情報なし';
-          
-          // 画像URL抽出
-          const imgEl = el.querySelector('img');
-          const imageUrl = imgEl ? imgEl.src : '';
-          
-          // 詳細リンク抽出
-          const linkEl = el.querySelector('a[href*="detail"], a[href*="vehicle"], a');
-          const url = linkEl ? linkEl.href : '';
-          
-          // デバッグ情報
-          console.log(`アイテム${index + 1}: ${title.substring(0, 30)}... / ${price} / ${km}`);
-          
-          return { title, price, km, imageUrl, url };
-        });
-      }, bestSelector);
-      
-      console.log(`✅ ${items.length}件の結果を取得`);
-    }
-    
-    // データが取得できない場合は、ページ全体から情報を抽出
-    if (items.length === 0) {
-      console.log('⚠️ 構造化データが見つからないため、ページ全体から抽出');
-      
-      items = await page.evaluate(() => {
-        // リンクから車両情報を推測
-        const links = Array.from(document.querySelectorAll('a[href*="detail"], a[href*="vehicle"]')).slice(0, 10);
-        
-        return links.map((link, index) => {
-          const parent = link.closest('div, li, tr, article') || link.parentElement;
-          const text = parent ? parent.textContent : link.textContent;
-          
-          const title = link.textContent.trim() || `車両 ${index + 1}`;
           const priceMatch = text.match(/[\d,]+円/);
-          const price = priceMatch ? priceMatch[0] : '価格情報なし';
-          const kmMatch = text.match(/[\d,]+km/i);
-          const km = kmMatch ? kmMatch[0] : '走行距離情報なし';
+          const price = priceMatch ? priceMatch[0] : '要確認';
+          const kmMatch = text.match(/[\d,]+千?km/i);
+          const km = kmMatch ? kmMatch[0] : '要確認';
           
-          const imgEl = parent ? parent.querySelector('img') : null;
-          const imageUrl = imgEl ? imgEl.src : '';
+          const img = item.querySelector('img');
+          const imageUrl = img ? img.src : '';
           
-          return {
-            title,
-            price,
-            km,
-            imageUrl,
-            url: link.href
-          };
+          const link = item.querySelector('a');
+          const url = link ? link.href : '';
+          
+          items.push({ title, price, km, imageUrl, url });
         });
-      });
+      }
       
-      console.log(`✅ リンクベースで${items.length}件抽出`);
-    }
+      return items.slice(0, 10); // 最大10件
+    });
 
-    // モックデータ（完全に取得できない場合のフォールバック）
-    if (items.length === 0) {
-      console.log('⚠️ 実データ取得失敗、サンプルデータを使用');
-      items = [
-        {
-          title: `${maker} ${model} (サンプル1)`,
-          price: '見積もり依頼',
-          km: '要確認',
-          imageUrl: 'https://via.placeholder.com/240',
-          url: 'https://www.iauc.co.jp/'
-        },
-        {
-          title: `${maker} ${model} (サンプル2)`,
-          price: '見積もり依頼',
-          km: '要確認',
-          imageUrl: 'https://via.placeholder.com/240',
-          url: 'https://www.iauc.co.jp/'
-        }
-      ];
-    }
+    console.log(`✅ ${results.length}件の結果取得`);
+    
+    // URLの補正
+    results.forEach(item => {
+      if (item.url && !item.url.startsWith('http')) {
+        item.url = 'https://www.iauc.co.jp' + item.url;
+      }
+      if (item.imageUrl && !item.imageUrl.startsWith('http')) {
+        item.imageUrl = 'https://www.iauc.co.jp' + item.imageUrl;
+      }
+    });
 
-    console.log('✅ fetchIaucResults完了:', items.length, '件の結果');
-    return items;
+    return results;
 
   } catch (error) {
-    console.error('❌ fetchIaucResults エラー:', error);
-    console.error('❌ スタックトレース:', error.stack);
-    
-    // エラー時のフォールバック
-    return [
-      {
-        title: 'エラーが発生しました',
-        price: '再度お試しください',
-        km: '-',
-        imageUrl: 'https://via.placeholder.com/240',
-        url: 'https://www.iauc.co.jp/'
-      }
-    ];
+    console.error('❌ 検索エラー:', error);
+    return [];
   } finally {
-    if (page) {
-      console.log('🧹 ページを閉じています...');
-      await page.close().catch(console.error);
-    }
-    if (browser) {
-      console.log('🧹 ブラウザを閉じています...');
-      await browser.close().catch(console.error);
-    }
+    if (page) await page.close().catch(console.error);
+    if (browser) await browser.close().catch(console.error);
   }
 }
 
+// イベントハンドラ
 async function handleEvent(event) {
-  console.log('📨 イベント受信:', event.type, event.message?.type);
+  console.log('📨 イベント受信:', event.type);
   
   if (event.type !== 'message' || event.message.type !== 'text') return;
 
-  const uid   = event.source.userId;
-  const text  = event.message.text.trim();
+  const uid = event.source.userId;
+  const text = event.message.text.trim();
   const token = event.replyToken;
 
-  console.log('👤 ユーザーID:', uid);
-  console.log('💬 受信テキスト:', text);
+  console.log('💬 受信:', text);
 
-  // 初回質問
-  if (!sessions.has(uid)) {
-    console.log('🆕 新規セッション開始');
-    sessions.set(uid, { step: 0, data: {} });
-    return client.replyMessage(token, { type:'text', text: QUESTIONS.maker });
+  // 「戻る」コマンドで最初から
+  if (text === '戻る') {
+    sessions.delete(uid);
+    return client.replyMessage(token, {
+      type: 'text',
+      text: '🔄 最初からやり直します。\n\n' + QUESTIONS.maker
+    });
   }
 
-  // 回答保存＆次へ
+  // 初回またはリセット後
+  if (!sessions.has(uid)) {
+    sessions.set(uid, { step: 0, data: {} });
+    return client.replyMessage(token, {
+      type: 'text',
+      text: '🚗 IAuc車両検索へようこそ！\n\n質問に答えて検索条件を設定してください。\n\n' + QUESTIONS.maker
+    });
+  }
+
+  // セッション更新
   const session = sessions.get(uid);
-  const field   = FIELDS[session.step];
-  session.data[field] = text;
+  const field = FIELDS[session.step];
+  
+  // パスの場合は空文字として保存
+  session.data[field] = (text === 'パス') ? '' : text;
   session.step++;
 
-  console.log('💾 セッション更新:', session);
+  console.log('📊 セッション:', session);
 
+  // 次の質問
   if (session.step < FIELDS.length) {
-    const next = FIELDS[session.step];
-    console.log('❓ 次の質問:', QUESTIONS[next]);
-    return client.replyMessage(token, { type:'text', text: QUESTIONS[next] });
+    const nextField = FIELDS[session.step];
+    return client.replyMessage(token, {
+      type: 'text',
+      text: QUESTIONS[nextField]
+    });
   }
- 
-  // 終了メッセージ
-  console.log('🔍 検索開始 - 収集した条件:', session.data);
+
+  // 全質問終了 → 検索実行
+  console.log('🔍 検索条件確定:', session.data);
+  
   await client.replyMessage(token, {
     type: 'text',
-    text: '✅ 条件が揃いました！\n検索中です...少々お待ちください（約30秒）'
+    text: '✅ 検索条件を受け付けました！\n\n🔍 IAucで検索中...\n（約30秒お待ちください）'
   });
 
   try {
-    // IAuc 検索実行
-    console.log('🚀 IAuc検索を開始...');
-    const results = await fetchIaucResults(session.data);
-    console.log('📊 検索結果:', results?.length || 0, '件');
-
-    // 0件ならテキスト通知して終了
+    const results = await searchIauc(session.data);
+    
     if (!results || results.length === 0) {
-      console.log('❌ 検索結果が0件でした');
       await client.pushMessage(uid, {
         type: 'text',
-        text: '申し訳ございません。該当する車両が見つかりませんでした。\n\n検索条件を変更してもう一度お試しください。\n・メーカー名は「トヨタ」「ホンダ」など\n・車種名は「プリウス」「フィット」など\n・予算は「100万」「200万」など\n・走行距離は「5万km」「10万km」など'
+        text: '😔 該当する車両が見つかりませんでした。\n\n検索条件を変更してお試しください。\n何か入力すると最初から検索できます。'
       });
-      sessions.delete(uid);
-      return;
-    }
-
-    // Flex メッセージ用バブル生成
-    console.log('🎨 Flexメッセージを生成中...');
-    const bubbles = results.slice(0, 5).map(item => ({
-      type: 'bubble',
-      hero: item.imageUrl ? {
-        type: 'image',
-        url: item.imageUrl,
-        size: 'full',
-        aspectRatio: '4:3',
-        aspectMode: 'cover',
-      } : undefined,
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        contents: [
-          { 
-            type: 'text', 
-            text: item.title, 
-            weight: 'bold', 
-            size: 'md',
-            wrap: true
-          },
-          { 
-            type: 'text', 
-            text: `💰 ${item.price}`, 
-            margin: 'sm',
-            color: '#FF5551' 
-          },
-          { 
-            type: 'text', 
-            text: `📏 ${item.km}`, 
-            margin: 'sm',
-            color: '#666666'
-          },
-        ],
-      },
-      footer: item.url ? {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'sm',
-        contents: [
-          {
+    } else {
+      // Flexメッセージ作成
+      const bubbles = results.slice(0, 5).map(item => ({
+        type: 'bubble',
+        hero: item.imageUrl ? {
+          type: 'image',
+          url: item.imageUrl || 'https://via.placeholder.com/240',
+          size: 'full',
+          aspectRatio: '4:3',
+          aspectMode: 'cover',
+        } : undefined,
+        body: {
+          type: 'box',
+          layout: 'vertical',
+          contents: [
+            {
+              type: 'text',
+              text: item.title,
+              weight: 'bold',
+              size: 'md',
+              wrap: true
+            },
+            {
+              type: 'text',
+              text: `💰 ${item.price}`,
+              margin: 'sm',
+              color: '#FF5551'
+            },
+            {
+              type: 'text',
+              text: `📏 ${item.km}`,
+              margin: 'sm',
+              color: '#666666'
+            }
+          ]
+        },
+        footer: item.url ? {
+          type: 'box',
+          layout: 'vertical',
+          contents: [{
             type: 'button',
             style: 'primary',
-            height: 'sm',
             action: {
               type: 'uri',
               label: '詳細を見る',
-              uri: item.url,
-            },
-          },
-        ],
-      } : undefined,
-    }));
-   
-    // Flex メッセージで検索結果を返信
-    console.log('📤 検索結果を送信中...');
-    await client.pushMessage(uid, {
-      type: 'flex',
-      altText: `IAuc検索結果: ${results.length}件の車両が見つかりました`,
-      contents: {
-        type: 'carousel',
-        contents: bubbles,
-      },
-    });
-    console.log('✅ 検索結果送信完了');
+              uri: item.url
+            }
+          }]
+        } : undefined
+      }));
 
-    // フォローアップメッセージ
-    await client.pushMessage(uid, {
-      type: 'text',
-      text: '検索結果は以上です。\n\n別の条件で検索したい場合は、何か文字を送信してください。'
-    });
+      await client.pushMessage(uid, {
+        type: 'flex',
+        altText: `🚗 ${results.length}件の車両が見つかりました`,
+        contents: {
+          type: 'carousel',
+          contents: bubbles
+        }
+      });
 
+      await client.pushMessage(uid, {
+        type: 'text',
+        text: `✨ ${results.length}件の車両が見つかりました！\n\n別の条件で検索する場合は、何か入力してください。`
+      });
+    }
   } catch (error) {
-    console.error('❌ 検索処理でエラーが発生:', error);
-    console.error('❌ スタックトレース:', error.stack);
-    
+    console.error('❌ エラー:', error);
     await client.pushMessage(uid, {
       type: 'text',
-      text: '申し訳ございません。検索処理中にエラーが発生しました。\n\nしばらく時間をおいてから再度お試しください。'
+      text: '⚠️ エラーが発生しました。\nしばらく待ってから再度お試しください。'
     }).catch(console.error);
   } finally {
-    // 会話セッションをクリア
-    console.log('🧹 セッションをクリア');
     sessions.delete(uid);
   }
 }
 
-// エラー時も 200 応答
+// エラーハンドラ
 app.use((err, req, res, next) => {
   console.error('Express Error:', err);
   res.sendStatus(200);
 });
 
-// 起動
+// サーバー起動
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`⚡️ Server running on port ${PORT}`));
-console.log('🚀 IAuc Bot Started - Enhanced Debug Version');
-console.log('📋 環境変数チェック:');
-console.log('- LINE_CHANNEL_SECRET:', process.env.LINE_CHANNEL_SECRET ? '✅設定済み' : '❌未設定');
-console.log('- LINE_CHANNEL_TOKEN:', process.env.LINE_CHANNEL_TOKEN ? '✅設定済み' : '❌未設定');
-console.log('- IAUC_USER_ID:', process.env.IAUC_USER_ID ? '✅設定済み' : '❌未設定');
-console.log('- IAUC_PASSWORD:', process.env.IAUC_PASSWORD ? '✅設定済み' : '❌未設定');
-console.log('- PUPPETEER_EXECUTABLE_PATH:', process.env.PUPPETEER_EXECUTABLE_PATH || 'デフォルト');
+app.listen(PORT, () => {
+  console.log(`⚡️ Server running on port ${PORT}`);
+  console.log('🚀 IAuc Bot Started - Improved Version');
+  console.log('📋 環境変数チェック:');
+  console.log('- LINE_CHANNEL_SECRET:', process.env.LINE_CHANNEL_SECRET ? '✅' : '❌');
+  console.log('- LINE_CHANNEL_TOKEN:', process.env.LINE_CHANNEL_TOKEN ? '✅' : '❌');
+  console.log('- IAUC_USER_ID:', process.env.IAUC_USER_ID ? '✅' : '❌');
+  console.log('- IAUC_PASSWORD:', process.env.IAUC_PASSWORD ? '✅' : '❌');
+  console.log('- PUPPETEER_EXECUTABLE_PATH:', process.env.PUPPETEER_EXECUTABLE_PATH || 'default');
+});
