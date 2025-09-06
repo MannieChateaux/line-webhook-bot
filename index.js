@@ -53,9 +53,12 @@ function toNumberYen(text) {
   const cleaned = text.replace(/[^\d万円]/g, '');
   const match = cleaned.match(/(\d+)万/);
   if (match) {
-    return String(parseInt(match[1], 10) * 10000);
+    return String(parseInt(match[1], 10));
   }
   const numMatch = cleaned.match(/\d+/);
+  if (numMatch && numMatch[0].length >= 6) {
+    return String(Math.floor(parseInt(numMatch[0]) / 10000));
+  }
   return numMatch ? numMatch[0] : '';
 }
 
@@ -63,19 +66,16 @@ function toNumberKm(text) {
   if (!text) return '';
   const cleaned = text.replace(/[^\d万千km]/g, '');
   
-  // 「3万km」形式
   const manMatch = cleaned.match(/(\d+)万/);
   if (manMatch) {
     return String(parseInt(manMatch[1], 10) * 10000);
   }
   
-  // 「30千km」形式（IAucの特殊表記）
   const senMatch = cleaned.match(/(\d+)千/);
   if (senMatch) {
     return String(parseInt(senMatch[1], 10) * 1000);
   }
   
-  // 純粋な数値
   const numMatch = cleaned.match(/\d+/);
   return numMatch ? numMatch[0] : '';
 }
@@ -118,8 +118,21 @@ async function searchIauc({ maker, model, grade, type, budget, mileage }) {
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     // 2) ログイン処理
-    console.log('🔐 ログイン処理...');
+    console.log('🔐 ログイン処理開始...');
     
+    // 同時ログイン対策: Cookieクリア
+    await page.evaluate(() => {
+      document.cookie.split(";").forEach(cookie => {
+        const eqPos = cookie.indexOf("=");
+        const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
+        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
+      });
+      if (typeof(Storage) !== "undefined") {
+        localStorage.clear();
+        sessionStorage.clear();
+      }
+    });
+
     // ログインリンクを探してクリック
     const loginClicked = await page.evaluate(() => {
       const links = Array.from(document.querySelectorAll('a'));
@@ -182,38 +195,73 @@ async function searchIauc({ maker, model, grade, type, budget, mileage }) {
     await page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // 3) 検索ページへ移動
-    console.log('🔍 検索ページへ移動...');
-    
-    // 検索ページURLを試行
-    const searchUrls = [
-      'https://www.iauc.co.jp/vehicle/search',
-      'https://www.iauc.co.jp/search',
-      'https://www.iauc.co.jp/inquiry/confirm.php'  // PDFで見た実際のURL
-    ];
-    
-    for (const url of searchUrls) {
-      try {
-        await page.goto(url, { waitUntil: 'domcontentloaded' });
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        const hasForm = await page.evaluate(() => {
-          return document.querySelectorAll('input, select').length > 0;
-        });
-        
-        if (hasForm) {
-          console.log('✅ 検索フォーム発見:', url);
-          break;
-        }
-      } catch (e) {
-        console.log(`⚠️ ${url} 試行失敗`);
-      }
+    // 同時ログイン規制チェック
+    const isKickedOut = await page.evaluate(() => {
+      const bodyText = document.body.textContent || '';
+      return bodyText.includes('セッションが切断されました') || 
+             bodyText.includes('同じIDでログインしました') ||
+             bodyText.includes('logged out');
+    });
+
+    if (isKickedOut) {
+      console.log('⚠️ 同時ログイン規制検出、10秒待機後再試行');
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      throw new Error('同時ログイン規制');
     }
 
-    // 4) フリーワード検索フィールドに入力
+    // 3) 会場選択プロセス（重要：前スレで解決済みの処理）
+    console.log('🎯 会場選択プロセス開始...');
+    
+    // 緑色全選択ボタンクリック
+    await page.click('#btn_vehicle_everyday_all').catch(() => {
+      console.log('⚠️ 緑色全選択ボタンが見つかりません');
+    });
+    console.log('✅ 緑色全選択完了');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // 青色全選択ボタンクリック  
+    await page.click('#btn_vehicle_day_all').catch(() => {
+      console.log('⚠️ 青色全選択ボタンが見つかりません');
+    });
+    console.log('✅ 青色全選択完了');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // 次へボタンクリック
+    await page.click('button.page-next-button.col-md-2.col-xs-4').catch(() => {
+      console.log('⚠️ 次へボタンが見つかりません');
+    });
+    console.log('✅ 次へボタンクリック完了');
+    
+    // ページ遷移を待機（長いパラメータ付きURLに到達）
+    await page.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    console.log('🌐 現在のURL:', page.url());
+
+    // 4) フリーワード検索タブをクリック
+    console.log('🔍 フリーワード検索タブをクリック...');
+    
+    const freewordTabClicked = await page.evaluate(() => {
+      // フリーワード検索タブを複数パターンで探す
+      const tabs = Array.from(document.querySelectorAll('button, a, div'));
+      for (const tab of tabs) {
+        const text = (tab.textContent || '').trim();
+        if (text === 'フリーワード検索' || text.includes('フリーワード')) {
+          tab.click();
+          console.log('✅ フリーワード検索タブクリック');
+          return true;
+        }
+      }
+      return false;
+    });
+    
+    if (freewordTabClicked) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    // 5) フリーワード検索ボックスに入力
     console.log('📝 検索条件入力...');
     
-    // フリーワード検索用のキーワードを構築
     const keywords = [];
     if (maker && maker !== 'パス') keywords.push(maker);
     if (model && model !== 'パス') keywords.push(model);
@@ -224,23 +272,24 @@ async function searchIauc({ maker, model, grade, type, budget, mileage }) {
     console.log('🔍 検索キーワード:', searchKeyword);
 
     if (searchKeyword) {
-      // フリーワード入力欄を探して入力
       const keywordEntered = await page.evaluate((keyword) => {
-        // 複数のパターンで検索欄を探す
+        // より広範囲でフリーワード入力欄を探す
         const selectors = [
-          'input[name*="keyword"]',
           'input[name*="freeword"]',
-          'input[placeholder*="キーワード"]',
           'input[placeholder*="フリーワード"]',
-          'input[type="text"]'  // 最後の手段
+          'input[placeholder*="キーワード"]',
+          'input[name*="keyword"]',
+          'textarea[name*="freeword"]',
+          'input[type="text"]'
         ];
         
         for (const selector of selectors) {
           const input = document.querySelector(selector);
-          if (input) {
+          if (input && input.offsetParent !== null) { // 表示されている要素のみ
             input.value = keyword;
             input.dispatchEvent(new Event('input', { bubbles: true }));
-            console.log('✅ キーワード入力:', selector);
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            console.log('✅ キーワード入力完了:', selector);
             return true;
           }
         }
@@ -252,159 +301,294 @@ async function searchIauc({ maker, model, grade, type, budget, mileage }) {
       }
     }
 
-    // 5) 検索実行
+    // 6) 検索実行
     console.log('🔍 検索実行...');
-    await page.evaluate(() => {
+    const searchExecuted = await page.evaluate(() => {
       const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a'));
-      const searchBtn = buttons.find(btn => {
+      for (const btn of buttons) {
         const text = (btn.textContent || btn.value || '').toLowerCase();
-        return text.includes('検索') || text.includes('search');
-      });
-      
-      if (searchBtn) {
-        searchBtn.click();
-      } else {
-        const form = document.querySelector('form');
-        if (form) form.submit();
+        if (text.includes('検索') || text.includes('search')) {
+          btn.click();
+          console.log('✅ 検索ボタンクリック');
+          return true;
+        }
       }
+      return false;
     });
 
-    await page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    // 6) 予算・走行距離でフィルタ（絞り込み画面がある場合）
-    console.log('🎯 絞り込み条件適用...');
-    
-    // 予算フィルタ
-    if (budget) {
-      const budgetNum = toNumberYen(budget);
-      await page.evaluate((amount) => {
-        // 予算入力欄を探す
-        const inputs = Array.from(document.querySelectorAll('input'));
-        for (const input of inputs) {
-          const label = (input.placeholder || input.name || '').toLowerCase();
-          if (label.includes('予算') || label.includes('価格') || label.includes('price')) {
-            input.value = amount;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            break;
+    if (searchExecuted) {
+      await page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    } else {
+      // 次へボタンでも試行
+      await page.evaluate(() => {
+        const nextBtns = Array.from(document.querySelectorAll('button, input'));
+        for (const btn of nextBtns) {
+          const text = (btn.textContent || btn.value || '');
+          if (text === '次へ') {
+            btn.click();
+            return;
           }
         }
-      }, budgetNum);
+      });
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
 
-    // 走行距離フィルタ
-    if (mileage) {
-      const mileageNum = toNumberKm(mileage);
+    // 7) 業販車フィルタ処理
+    console.log('🎯 業販車フィルタ処理開始...');
+    
+    // 結果カラムの絞り込みボタンをクリック
+    const resultButtonClicked = await page.evaluate(() => {
+      // 結果カラムのボタンを探す
+      const buttons = Array.from(document.querySelectorAll('a, button'));
+      for (const btn of buttons) {
+        const classes = btn.className || '';
+        const text = btn.textContent || '';
+        if (classes.includes('narrow_button') && (classes.includes('result') || text.includes('結果'))) {
+          btn.click();
+          console.log('✅ 結果ボタンクリック');
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (resultButtonClicked) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // チェックボックス形式の場合（PDFの画像参照）
-      const checkboxSelected = await page.evaluate((distance) => {
-        // 走行距離のチェックボックスを探す
-        const labels = Array.from(document.querySelectorAll('label'));
-        for (const label of labels) {
-          const text = label.textContent || '';
-          if (text.includes('km') && text.includes(String(distance / 10000) + '万')) {
-            const checkbox = label.querySelector('input[type="checkbox"]');
-            if (checkbox) {
-              checkbox.checked = true;
-              checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-              return true;
+      // 業販車フィルタ選択（未せり、仮出品、申込可）
+      await page.evaluate(() => {
+        const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+        const labels = document.querySelectorAll('label');
+        
+        ['未せり', '仮出品', '申込可'].forEach(filterText => {
+          // ラベルテキストで検索
+          for (const label of labels) {
+            if (label.textContent && label.textContent.includes(filterText)) {
+              const checkbox = label.querySelector('input[type="checkbox"]') || 
+                             document.querySelector(`input[type="checkbox"][value*="${filterText}"]`);
+              if (checkbox) {
+                checkbox.checked = true;
+                checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                console.log(`✅ ${filterText}選択完了`);
+              }
             }
+          }
+        });
+      });
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // OKボタンクリック
+      await page.evaluate(() => {
+        const okButtons = Array.from(document.querySelectorAll('button, input'));
+        for (const btn of okButtons) {
+          const text = (btn.textContent || btn.value || '');
+          if (text === 'OK' || text === 'ok') {
+            btn.click();
+            console.log('✅ OKボタンクリック');
+            return;
+          }
+        }
+      });
+      
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+
+    // 8) 予算・走行距離フィルタ
+    console.log('💰 予算フィルタ処理...');
+    if (budget) {
+      const budgetAmount = toNumberYen(budget);
+      
+      const priceFilterClicked = await page.evaluate(() => {
+        // スタートカラムのボタンを探す
+        const buttons = Array.from(document.querySelectorAll('a, button'));
+        for (const btn of buttons) {
+          const classes = btn.className || '';
+          const text = btn.textContent || '';
+          if (text.includes('スタート') || classes.includes('start')) {
+            btn.click();
+            console.log('✅ 価格フィルタボタンクリック');
+            return true;
           }
         }
         return false;
-      }, mileageNum);
+      });
       
-      if (!checkboxSelected) {
-        // 入力欄形式の場合
-        await page.evaluate((distance) => {
-          const inputs = Array.from(document.querySelectorAll('input'));
+      if (priceFilterClicked) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // 価格入力
+        await page.evaluate((amount) => {
+          const inputs = document.querySelectorAll('input[type="text"], input[type="number"]');
           for (const input of inputs) {
-            const label = (input.placeholder || input.name || '').toLowerCase();
-            if (label.includes('走行') || label.includes('距離') || label.includes('mileage')) {
-              input.value = distance;
+            const id = input.id || '';
+            const name = input.name || '';
+            if (id.includes('startPrice') || name.includes('price') || id.includes('To')) {
+              input.value = amount;
               input.dispatchEvent(new Event('input', { bubbles: true }));
+              console.log('✅ 価格入力完了:', amount);
               break;
             }
           }
-        }, mileageNum);
+        }, budgetAmount);
+        
+        // OK実行
+        await page.evaluate(() => {
+          const okBtn = document.querySelector('button:contains("OK"), input[value="OK"]') ||
+                       Array.from(document.querySelectorAll('button')).find(btn => btn.textContent === 'OK');
+          if (okBtn) okBtn.click();
+        });
+        
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
 
-    // 絞り込み実行（OKボタンなど）
-    await page.evaluate(() => {
-      const okBtn = Array.from(document.querySelectorAll('button, input')).find(btn => {
-        const text = (btn.textContent || btn.value || '');
-        return text === 'OK' || text === '絞り込み' || text === '検索';
+    // 9) 走行距離フィルタ
+    console.log('📏 走行距離フィルタ処理...');
+    if (mileage) {
+      const mileageNum = toNumberKm(mileage);
+      
+      const mileageFilterClicked = await page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('a, button'));
+        for (const btn of buttons) {
+          const text = btn.textContent || '';
+          if (text.includes('走行') || text === '走行') {
+            btn.click();
+            console.log('✅ 走行距離フィルタボタンクリック');
+            return true;
+          }
+        }
+        return false;
       });
-      if (okBtn) okBtn.click();
+      
+      if (mileageFilterClicked) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // 走行距離チェックボックス選択
+        await page.evaluate((maxMileage) => {
+          const mileageLimit = Math.floor(maxMileage / 10000); // 万km単位
+          const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+          const labels = document.querySelectorAll('label');
+          
+          // 指定上限以下の項目をすべてチェック
+          for (let i = 1; i <= mileageLimit; i++) {
+            for (const label of labels) {
+              const text = label.textContent || '';
+              if (text.includes(`${i}万km`) || text.includes(`${i}万`)) {
+                const checkbox = label.querySelector('input[type="checkbox"]');
+                if (checkbox) {
+                  checkbox.checked = true;
+                  checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                  console.log(`✅ ${i}万km選択`);
+                }
+              }
+            }
+          }
+        }, mileageNum);
+        
+        // OK実行
+        await page.evaluate(() => {
+          const okBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.textContent === 'OK');
+          if (okBtn) okBtn.click();
+        });
+        
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+
+    // 10) 価格昇順ソート
+    console.log('⬆️ 価格昇順ソート実行...');
+    await page.evaluate(() => {
+      // スタートカラムの上向き三角ボタンを探す
+      const sortButtons = Array.from(document.querySelectorAll('a, button, span'));
+      for (const btn of sortButtons) {
+        const classes = btn.className || '';
+        const title = btn.title || '';
+        if (classes.includes('sort_button') && 
+           (title.includes('並び替え') || classes.includes('asc'))) {
+          btn.click();
+          console.log('✅ 価格昇順ソート実行');
+          return;
+        }
+      }
     });
     
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // 7) 検索結果取得
-    console.log('📊 検索結果を取得中...');
+    // 11) 検索結果データ取得
+    console.log('📊 検索結果データ取得中...');
     
     const results = await page.evaluate(() => {
-      // 様々なパターンで結果を探す
       const items = [];
       
-      // テーブル形式の場合
-      const rows = document.querySelectorAll('tbody tr');
-      if (rows.length > 0) {
-        rows.forEach((row, index) => {
-          if (index === 0) return; // ヘッダー行スキップ
-          
-          const cells = row.querySelectorAll('td');
-          if (cells.length > 0) {
-            const text = row.textContent || '';
-            
-            // 各セルからデータ抽出
-            const title = cells[0]?.textContent?.trim() || `車両 ${index}`;
-            const priceMatch = text.match(/[\d,]+円/);
-            const price = priceMatch ? priceMatch[0] : '要確認';
-            const kmMatch = text.match(/[\d,]+千?km/i);
-            const km = kmMatch ? kmMatch[0] : '要確認';
-            
-            const link = row.querySelector('a');
-            const url = link ? link.href : '';
-            
-            items.push({ title, price, km, url, imageUrl: '' });
-          }
-        });
-      }
+      // テーブル行を取得
+      const rows = document.querySelectorAll('tbody tr, .list-item, .vehicle-item');
       
-      // リスト形式の場合
-      if (items.length === 0) {
-        const listItems = document.querySelectorAll('.result-item, .vehicle-item, .car-item, li');
-        listItems.forEach((item, index) => {
-          const text = item.textContent || '';
-          const titleEl = item.querySelector('h2, h3, h4, .title, .name');
-          const title = titleEl ? titleEl.textContent.trim() : `車両 ${index + 1}`;
+      rows.forEach((row, index) => {
+        try {
+          const cells = row.querySelectorAll('td, .cell, .item-data');
           
-          const priceMatch = text.match(/[\d,]+円/);
-          const price = priceMatch ? priceMatch[0] : '要確認';
-          const kmMatch = text.match(/[\d,]+千?km/i);
-          const km = kmMatch ? kmMatch[0] : '要確認';
-          
-          const img = item.querySelector('img');
+          // サムネイル画像
+          const img = row.querySelector('img');
           const imageUrl = img ? img.src : '';
           
-          const link = item.querySelector('a');
-          const url = link ? link.href : '';
+          // 車名とグレード（最初のセルまたはタイトル要素）
+          const titleEl = row.querySelector('h1, h2, h3, h4, .title, .name') || cells[1];
+          const title = titleEl ? titleEl.textContent.trim() : `車両 ${index + 1}`;
           
-          items.push({ title, price, km, imageUrl, url });
-        });
-      }
+          // 価格抽出
+          const rowText = row.textContent || '';
+          const priceMatch = rowText.match(/(\d+(?:,\d+)*(?:\.\d+)?)万?円/);
+          const price = priceMatch ? priceMatch[0] : '価格要確認';
+          
+          // 走行距離抽出
+          const kmMatch = rowText.match(/(\d+(?:,\d+)*(?:\.\d+)?)(?:千)?km/i);
+          const mileage = kmMatch ? kmMatch[0] : '走行距離要確認';
+          
+          // 年式抽出
+          const yearMatch = rowText.match(/([HRS]?\d{1,2}年|\d{4}年)/);
+          const year = yearMatch ? yearMatch[0] : '年式要確認';
+          
+          // 会場名・地区抽出（オークションハウス情報）
+          const venueMatch = rowText.match(/(LAP|TAA|JU|オークネット|ミライブ).*?[都道府県市区町村]/);
+          const venue = venueMatch ? venueMatch[0] : '会場要確認';
+          const location = venue.includes('東京') ? '関東' : 
+                          venue.includes('大阪') ? '関西' : 
+                          venue.includes('愛知') ? '中部' : '地区要確認';
+          
+          // 詳細URLの取得
+          const link = row.querySelector('a');
+          const detailUrl = link ? link.href : '';
+          
+          items.push({
+            imageUrl,
+            title,
+            mileage,
+            price,
+            year,
+            venue,
+            location,
+            detailUrl
+          });
+          
+        } catch (error) {
+          console.log(`車両${index + 1}のデータ抽出エラー:`, error);
+        }
+      });
       
       return items.slice(0, 10); // 最大10件
     });
 
-    console.log(`✅ ${results.length}件の結果取得`);
+    console.log(`✅ ${results.length}件の検索結果を取得`);
+    results.forEach((item, i) => {
+      console.log(`${i + 1}: ${item.title} - ${item.price} - ${item.mileage}`);
+    });
     
-    // URLの補正
+    // URL補正
     results.forEach(item => {
-      if (item.url && !item.url.startsWith('http')) {
-        item.url = 'https://www.iauc.co.jp' + item.url;
+      if (item.detailUrl && !item.detailUrl.startsWith('http')) {
+        item.detailUrl = 'https://www.iauc.co.jp' + item.detailUrl;
       }
       if (item.imageUrl && !item.imageUrl.startsWith('http')) {
         item.imageUrl = 'https://www.iauc.co.jp' + item.imageUrl;
@@ -488,12 +672,12 @@ async function handleEvent(event) {
         text: '😔 該当する車両が見つかりませんでした。\n\n検索条件を変更してお試しください。\n何か入力すると最初から検索できます。'
       });
     } else {
-      // Flexメッセージ作成
+      // Flexメッセージ作成（7項目表示）
       const bubbles = results.slice(0, 5).map(item => ({
         type: 'bubble',
         hero: item.imageUrl ? {
           type: 'image',
-          url: item.imageUrl || 'https://via.placeholder.com/240',
+          url: item.imageUrl || 'https://via.placeholder.com/240x180/cccccc/000000?text=No+Image',
           size: 'full',
           aspectRatio: '4:3',
           aspectMode: 'cover',
@@ -513,26 +697,50 @@ async function handleEvent(event) {
               type: 'text',
               text: `💰 ${item.price}`,
               margin: 'sm',
-              color: '#FF5551'
+              color: '#FF5551',
+              size: 'sm'
             },
             {
               type: 'text',
-              text: `📏 ${item.km}`,
-              margin: 'sm',
-              color: '#666666'
+              text: `📏 ${item.mileage}`,
+              margin: 'xs',
+              color: '#666666',
+              size: 'sm'
+            },
+            {
+              type: 'text',
+              text: `📅 ${item.year}`,
+              margin: 'xs',
+              color: '#666666',
+              size: 'xs'
+            },
+            {
+              type: 'text',
+              text: `🏢 ${item.venue}`,
+              margin: 'xs',
+              color: '#999999',
+              size: 'xs'
+            },
+            {
+              type: 'text',
+              text: `📍 ${item.location}`,
+              margin: 'xs',
+              color: '#999999',
+              size: 'xs'
             }
           ]
         },
-        footer: item.url ? {
+        footer: item.detailUrl ? {
           type: 'box',
           layout: 'vertical',
           contents: [{
             type: 'button',
             style: 'primary',
+            color: '#0066CC',
             action: {
               type: 'uri',
               label: '詳細を見る',
-              uri: item.url
+              uri: item.detailUrl
             }
           }]
         } : undefined
@@ -546,6 +754,21 @@ async function handleEvent(event) {
           contents: bubbles
         }
       });
+
+      // 追加の車両がある場合はテキストでも表示
+      if (results.length > 5) {
+        let additionalText = '📋 追加の車両情報:\n\n';
+        results.slice(5).forEach((item, index) => {
+          additionalText += `${index + 6}. ${item.title}\n`;
+          additionalText += `💰 ${item.price} 📏 ${item.mileage}\n`;
+          additionalText += `📅 ${item.year} 🏢 ${item.venue}\n\n`;
+        });
+        
+        await client.pushMessage(uid, {
+          type: 'text',
+          text: additionalText
+        });
+      }
 
       await client.pushMessage(uid, {
         type: 'text',
@@ -573,7 +796,7 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`⚡️ Server running on port ${PORT}`);
-  console.log('🚀 IAuc Bot Started - Improved Version');
+  console.log('🚀 IAuc Bot Started - Complete Fixed Version');
   console.log('📋 環境変数チェック:');
   console.log('- LINE_CHANNEL_SECRET:', process.env.LINE_CHANNEL_SECRET ? '✅' : '❌');
   console.log('- LINE_CHANNEL_TOKEN:', process.env.LINE_CHANNEL_TOKEN ? '✅' : '❌');
