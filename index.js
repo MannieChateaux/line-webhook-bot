@@ -24,9 +24,14 @@ app.use(express.json({
 
 // セッション保持用
 const sessions = new Map();
-const FIELDS = ['keyword'];
+const FIELDS = ['maker','model','grade','type','budget','mileage'];
 const QUESTIONS = {
-  keyword: '検索したい車の情報を教えてください（例：スバル インプレッサ、トヨタ ヤリス 2020）'
+  maker:   '🚗 メーカーを教えてください\n（例：スバル、アルファロメオ、ランチア）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
+  model:   '🚗 車名を教えてください\n（例：インプレッサ、155、デルタ）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
+  grade:   '⭐ グレードを教えてください\n（例：WRX、V6 TI、インテグラーレエヴォルツィオーネ）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
+  type:    '📋 型式を教えてください\n（例：GC8、167A1E、L31E5）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
+  budget:  '💰 予算上限を教えてください\n（例：100万円、500万円）\n\n🔄 最初からやり直す場合は「戻る」と入力',
+  mileage: '📏 走行距離上限を教えてください\n（例：3万km、10万km）\n\n🔄 最初からやり直す場合は「戻る」と入力'
 };
 
 // 2) Webhook 受け口：署名検証→ハンドラ
@@ -115,8 +120,16 @@ async function typeIfExists(page, selector, value) {
 }
 
 // フリーワード検索でIAucデータ取得
-async function fetchIaucResults({ keyword }) {
-  console.log('フリーワード検索開始:', keyword);
+async function fetchIaucResults({ maker, model, grade, type, budget, mileage }) {
+  // フリーワード検索用キーワード生成
+const keywords = [];
+if (maker && maker !== 'パス') keywords.push(maker);
+if (model && model !== 'パス') keywords.push(model);
+if (grade && grade !== 'パス') keywords.push(grade);
+if (type && type !== 'パス') keywords.push(type);
+
+const keyword = keywords.join(' ');
+console.log('フリーワード検索開始:', keyword);
   
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath();
   let browser, page;
@@ -778,26 +791,41 @@ async function handleEvent(event) {
   console.log('ユーザーID:', uid);
   console.log('受信テキスト:', text);
 
+  // 「戻る」コマンドで最初から
+  if (text === '戻る') {
+    sessions.delete(uid);
+    return client.replyMessage(token, {
+      type: 'text',
+      text: '🔄 最初からやり直します。\n\n' + QUESTIONS.maker
+    });
+  }
+
   // 初回質問
   if (!sessions.has(uid)) {
     console.log('新規セッション開始');
     sessions.set(uid, { step: 0, data: {} });
-    return client.replyMessage(token, { type:'text', text: QUESTIONS.keyword });
+    return client.replyMessage(token, { type:'text', text: QUESTIONS.maker });
   }
 
   // 回答保存＆次へ
   const session = sessions.get(uid);
   const field   = FIELDS[session.step];
-  session.data.keyword = text;
+  session.data[field] = (text === 'パス') ? '' : text;
   session.step++;
 
   console.log('セッション更新:', session);
+
+  // 次の質問
+  if (session.step < FIELDS.length) {
+    const nextField = FIELDS[session.step];
+    return client.replyMessage(token, { type:'text', text: QUESTIONS[nextField] });
+  }
  
   // 終了メッセージ
   console.log('検索開始 - 収集した条件:', session.data);
   await client.replyMessage(token, {
     type: 'text',
-    text: '検索結果を取得中…少々お待ちください！'
+    text: '✅ 検索条件を受け付けました！\n\n🔍 IAucで検索中...\n（約30秒お待ちください）'
   });
 
   try {
