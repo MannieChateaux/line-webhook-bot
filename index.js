@@ -1,6 +1,7 @@
 const express = require('express');
 const { middleware, Client } = require('@line/bot-sdk');
 const puppeteer = require('puppeteer');
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // 環境変数
 const config = {
@@ -14,7 +15,7 @@ const app = express();
 // ヘルスチェック
 app.get('/healthz', (_req, res) => res.send('ok'));
 
-// express.json に verify で rawBody をセット
+// 1) express.json に verify で rawBody をセット
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf.toString('utf8');
@@ -23,17 +24,12 @@ app.use(express.json({
 
 // セッション保持用
 const sessions = new Map();
-const FIELDS = ['maker','model','grade','type','budget','mileage'];
+const FIELDS = ['keyword'];
 const QUESTIONS = {
-  maker:   '🚗 メーカーを教えてください\n（例：スバル、アルファロメオ、ランチア）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
-  model:   '🚗 車名を教えてください\n（例：インプレッサ、155、デルタ）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
-  grade:   '⭐ グレードを教えてください\n（例：WRX、V6 TI、インテグラーレエヴォルツィオーネ）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
-  type:    '📋 型式を教えてください\n（例：GC8、167A1E、L31E5）\n\n❗わからない場合は「パス」と入力\n🔄 最初からやり直す場合は「戻る」と入力',
-  budget:  '💰 予算上限を教えてください\n（例：100万円、500万円）\n\n🔄 最初からやり直す場合は「戻る」と入力',
-  mileage: '📏 走行距離上限を教えてください\n（例：3万km、10万km）\n\n🔄 最初からやり直す場合は「戻る」と入力',
+  keyword: '検索したい車の情報を教えてください（例：スバル インプレッサ、トヨタ ヤリス 2020）'
 };
 
-// Webhook 受け口
+// 2) Webhook 受け口：署名検証→ハンドラ
 app.post(
   '/webhook',
   (req, res, next) => middleware({
@@ -42,54 +38,90 @@ app.post(
   })(req, res, next),
   async (req, res) => {
     const events = req.body.events;
+    // 先に 200 を返す（重要）
     res.sendStatus(200);
+    // 後処理は非同期で流す
     for (const e of events) handleEvent(e).catch(console.error);
   }
 );
 
-// 数値変換ヘルパー
+// 安全なナビゲーション関数
+async function safeNavigation(page, url, options = {}) {
+  const defaultOptions = {
+    waitUntil: 'domcontentloaded', // networkidle2 → domcontentloaded に変更
+    timeout: 90000 // 60秒 → 90秒に延長
+  };
+  
+  const finalOptions = { ...defaultOptions, ...options };
+  
+  try {
+    console.log(`ナビゲーション開始: ${url}`);
+    await page.goto(url, finalOptions);
+    console.log(`ナビゲーション成功: ${page.url()}`);
+    return true;
+  } catch (error) {
+    console.log(`ナビゲーション失敗: ${error.message}`);
+    console.log(`現在のURL: ${page.url()}`);
+    // エラーでも現在のページで継続
+    return false;
+  }
+}
+
+// <select> を「value」ではなく「表示ラベル」で選ぶ
+async function selectByLabel(page, selectSelector, labelText) {
+  if (!labelText) return;
+  await page.evaluate(({ sel, label }) => {
+    const el = document.querySelector(sel);
+    if (!el) return;
+    const opts = Array.from(el.options);
+    const hit = opts.find(o =>
+      (o.textContent || '').trim().includes(label.trim())
+    );
+    if (hit) {
+      el.value = hit.value;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }, { sel: selectSelector, label: labelText });
+}
+
+// 「50万」→「500000」、「5万km」→「50000」などの正規化
 function toNumberYen(text) {
   if (!text) return '';
-  const cleaned = text.replace(/[^\d万円]/g, '');
-  const match = cleaned.match(/(\d+)万/);
-  if (match) {
-    return String(parseInt(match[1], 10));
+  const t = String(text).replace(/[^\d万]/g, '');
+  if (!t) return '';
+  if (t.endsWith('万')) {
+    const n = parseInt(t.replace('万', ''), 10);
+    return isNaN(n) ? '' : String(n * 10000);
   }
-  const numMatch = cleaned.match(/\d+/);
-  if (numMatch && numMatch[0].length >= 6) {
-    return String(Math.floor(parseInt(numMatch[0]) / 10000));
-  }
-  return numMatch ? numMatch[0] : '';
+  return String(parseInt(t, 10) || '');
 }
 
 function toNumberKm(text) {
   if (!text) return '';
-  const cleaned = text.replace(/[^\d万千km]/g, '');
-  
-  const manMatch = cleaned.match(/(\d+)万/);
-  if (manMatch) {
-    return String(parseInt(manMatch[1], 10) * 10000);
+  const t = String(text).replace(/[^\d万]/g, '');
+  if (!t) return '';
+  if (t.endsWith('万')) {
+    const n = parseInt(t.replace('万', ''), 10);
+    return isNaN(n) ? '' : String(n * 10000);
   }
-  
-  const senMatch = cleaned.match(/(\d+)千/);
-  if (senMatch) {
-    return String(parseInt(senMatch[1], 10) * 1000);
-  }
-  
-  const numMatch = cleaned.match(/\d+/);
-  return numMatch ? numMatch[0] : '';
+  return String(parseInt(t, 10) || '');
 }
 
-// IAuc検索関数
-async function searchIauc({ maker, model, grade, type, budget, mileage }) {
-  console.log('🔍 IAuc検索開始:', { maker, model, grade, type, budget, mileage });
+// 要素があるときだけ type する（安全運転）
+async function typeIfExists(page, selector, value) {
+  if (!value) return;
+  const el = await page.$(selector);
+  if (el) await page.type(selector, value, { delay: 20 });
+}
+
+// フリーワード検索でIAucデータ取得
+async function fetchIaucResults({ keyword }) {
+  console.log('フリーワード検索開始:', keyword);
   
   const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath();
-  let browser;
-  let page;
+  let browser, page;
   
   try {
-    console.log('🚀 ブラウザ起動中...');
     browser = await puppeteer.launch({
       headless: 'new',
       args: [
@@ -98,13 +130,16 @@ async function searchIauc({ maker, model, grade, type, budget, mileage }) {
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--no-zygote',
+        '--disable-web-security',
+        '--disable-features=VizDisplayCompositor'
       ],
       executablePath: execPath,
     });
 
     page = await browser.newPage();
-    page.setDefaultNavigationTimeout(60000);
-    page.setDefaultTimeout(60000);
+    // タイムアウト設定を延長
+    page.setDefaultNavigationTimeout(90000);
+    page.setDefaultTimeout(90000);
 
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
@@ -112,695 +147,804 @@ async function searchIauc({ maker, model, grade, type, budget, mileage }) {
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP,ja;q=0.9' });
     await page.setViewport({ width: 1280, height: 800 });
 
-    // 1) IAucサイトアクセス
-    console.log('🌐 IAucにアクセス中...');
-    await page.goto('https://www.iauc.co.jp/', { waitUntil: 'domcontentloaded' });
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    console.log('IAuc 2段階ログインフロー開始...');
 
-    // 2) ログイン処理
-    console.log('🔐 ログイン処理開始...');
-    
-    // 同時ログイン対策: Cookieクリア
-    await page.evaluate(() => {
-      document.cookie.split(";").forEach(cookie => {
-        const eqPos = cookie.indexOf("=");
-        const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
-        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
-      });
-      if (typeof(Storage) !== "undefined") {
-        localStorage.clear();
-        sessionStorage.clear();
-      }
-    });
-
-    // ログインリンクを探してクリック
-    const loginClicked = await page.evaluate(() => {
-      const links = Array.from(document.querySelectorAll('a'));
-      const loginLink = links.find(link => {
-        const text = (link.textContent || '').toLowerCase();
-        const href = (link.href || '').toLowerCase();
-        return text.includes('ログイン') || text.includes('login') || href.includes('login');
-      });
-      if (loginLink) {
-        loginLink.click();
-        return true;
-      }
-      return false;
-    });
-    
-    if (loginClicked) {
-      console.log('✅ ログインページへ遷移');
-      await page.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-
-    // ログイン情報入力
     const uid = process.env.IAUC_USER_ID;
     const pw = process.env.IAUC_PASSWORD;
-    
-    if (!uid || !pw) {
-      throw new Error('IAUC認証情報が未設定です');
-    }
+    if (!uid || !pw) throw new Error('IAUC_USER_ID / IAUC_PASSWORD が未設定');
 
-    // ID入力
-    await page.evaluate((userId) => {
-      const inputs = document.querySelectorAll('input[type="text"], input[name*="user"], input[name*="id"]');
-      if (inputs.length > 0) {
-        inputs[0].value = userId;
-        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-      }
-    }, uid);
-
-    // パスワード入力
-    await page.evaluate((password) => {
-      const pwInput = document.querySelector('input[type="password"]');
-      if (pwInput) {
-        pwInput.value = password;
-        pwInput.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-    }, pw);
-
-    // ログイン実行
-    await page.evaluate(() => {
-      const submitBtn = document.querySelector('input[type="submit"], button[type="submit"]');
-      if (submitBtn) {
-        submitBtn.click();
-      } else {
-        const form = document.querySelector('form');
-        if (form) form.submit();
-      }
-    });
-
-    console.log('⏳ ログイン完了待機...');
-    await page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    // 同時ログイン規制チェック
-    const isKickedOut = await page.evaluate(() => {
-      const bodyText = document.body.textContent || '';
-      return bodyText.includes('セッションが切断されました') || 
-             bodyText.includes('同じIDでログインしました') ||
-             bodyText.includes('logged out');
-    });
-
-    if (isKickedOut) {
-      console.log('⚠️ 同時ログイン規制検出、10秒待機後再試行');
-      await new Promise(resolve => setTimeout(resolve, 10000));
-      throw new Error('同時ログイン規制');
-    }
-
-    // 3) 会場選択プロセス（重要：前スレで解決済みの処理）
-    console.log('🎯 会場選択プロセス開始...');
-    
-    // 緑色全選択ボタンクリック
-    await page.click('#btn_vehicle_everyday_all').catch(() => {
-      console.log('⚠️ 緑色全選択ボタンが見つかりません');
-    });
-    console.log('✅ 緑色全選択完了');
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // 青色全選択ボタンクリック  
-    await page.click('#btn_vehicle_day_all').catch(() => {
-      console.log('⚠️ 青色全選択ボタンが見つかりません');
-    });
-    console.log('✅ 青色全選択完了');
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // 次へボタンクリック
-    await page.click('button.page-next-button.col-md-2.col-xs-4').catch(() => {
-      console.log('⚠️ 次へボタンが見つかりません');
-    });
-    console.log('✅ 次へボタンクリック完了');
-    
-    // ページ遷移を待機（長いパラメータ付きURLに到達）
-    await page.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    
-    console.log('🌐 現在のURL:', page.url());
-
-    // 4) フリーワード検索タブをクリック
-    console.log('🔍 フリーワード検索タブをクリック...');
-    
-    const freewordTabClicked = await page.evaluate(() => {
-      // フリーワード検索タブを複数パターンで探す
-      const tabs = Array.from(document.querySelectorAll('button, a, div'));
-      for (const tab of tabs) {
-        const text = (tab.textContent || '').trim();
-        if (text === 'フリーワード検索' || text.includes('フリーワード')) {
-          tab.click();
-          console.log('✅ フリーワード検索タブクリック');
-          return true;
-        }
-      }
-      return false;
-    });
-    
-    if (freewordTabClicked) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-
-    // 5) フリーワード検索ボックスに入力
-    console.log('📝 検索条件入力...');
-    
-    const keywords = [];
-    if (maker && maker !== 'パス') keywords.push(maker);
-    if (model && model !== 'パス') keywords.push(model);
-    if (grade && grade !== 'パス') keywords.push(grade);
-    if (type && type !== 'パス') keywords.push(type);
-    
-    const searchKeyword = keywords.join(' ');
-    console.log('🔍 検索キーワード:', searchKeyword);
-
-    if (searchKeyword) {
-      const keywordEntered = await page.evaluate((keyword) => {
-        // より広範囲でフリーワード入力欄を探す
-        const selectors = [
-          'input[name*="freeword"]',
-          'input[placeholder*="フリーワード"]',
-          'input[placeholder*="キーワード"]',
-          'input[name*="keyword"]',
-          'textarea[name*="freeword"]',
-          'input[type="text"]'
-        ];
-        
-        for (const selector of selectors) {
-          const input = document.querySelector(selector);
-          if (input && input.offsetParent !== null) { // 表示されている要素のみ
-            input.value = keyword;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            console.log('✅ キーワード入力完了:', selector);
-            return true;
-          }
-        }
+    // ログイン状態確認関数
+    async function isLoggedIn() {
+      try {
+        const logoutLink = await page.$('a[href*="/service/logout"]');
+        return !!logoutLink;
+      } catch {
         return false;
-      }, searchKeyword);
-      
-      if (!keywordEntered) {
-        console.log('⚠️ フリーワード入力欄が見つかりません');
       }
     }
 
-    // 6) 検索実行
-    console.log('🔍 検索実行...');
-    const searchExecuted = await page.evaluate(() => {
-      const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a'));
-      for (const btn of buttons) {
-        const text = (btn.textContent || btn.value || '').toLowerCase();
-        if (text.includes('検索') || text.includes('search')) {
-          btn.click();
-          console.log('✅ 検索ボタンクリック');
-          return true;
+   // 既存セッション強制クリア（同時ログイン対策）
+    console.log('既存セッションクリア中...');
+    try {
+      // Cookieクリア
+      await page.deleteCookie(...(await page.cookies()));
+      
+      // LocalStorage/SessionStorageクリア
+      await page.evaluate(() => {
+        localStorage.clear();
+        sessionStorage.clear();
+      });
+      
+      console.log('セッションクリア完了');
+    } catch (e) {
+      console.log('セッションクリア中にエラー:', e.message);
+    }
+    
+    if (!(await isLoggedIn())) {
+      console.log('2段階ログイン処理開始...');
+      
+      // STAGE 1: ログインページに直接アクセス
+      console.log('STAGE 1: ログインページへ直接アクセス');
+      await safeNavigation(page, 'https://www.iauc.co.jp/service/');
+      
+      // STAGE 1.5: 最初のログインボタンクリック
+      console.log('STAGE 1.5: 最初のログインボタンクリック');
+      await page.waitForSelector('a.login-btn.btn.btn-info[href*="/service/login"]', { timeout: 15000 });
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => console.log('ナビゲーション待機タイムアウト')),
+        page.click('a.login-btn.btn.btn-info[href*="/service/login"]')
+      ]);
+
+      console.log('ログインページ遷移完了:', page.url());
+      
+      // STAGE 2: フォーム要素が出現するまで待機（修正されたセレクタ）
+      console.log('STAGE 2: ログインフォーム要素の待機');
+      await page.waitForSelector('input[name="id"]', { timeout: 20000 });
+      await page.waitForSelector('input[name="password"]', { timeout: 20000 });
+      await page.waitForSelector('button#login_button', { timeout: 20000 });
+      
+      // STAGE 3: ID/パスワード入力（入力前にクリア）
+      console.log('STAGE 3: ID/パスワード入力');
+      
+      // IDフィールドをクリアして入力
+      await page.focus('input[name="id"]');
+      await page.keyboard.down('Control');
+      await page.keyboard.press('a');
+      await page.keyboard.up('Control');
+      await page.type('input[name="id"]', uid, { delay: 40 });
+      
+      // パスワードフィールドをクリアして入力
+      await page.focus('input[name="password"]');
+      await page.keyboard.down('Control');
+      await page.keyboard.press('a');
+      await page.keyboard.up('Control');
+      await page.type('input[name="password"]', pw, { delay: 40 });
+      
+      // STAGE 4: ログインボタンクリック
+      console.log('STAGE 4: ログインボタンクリック');
+      await page.click('button#login_button');
+      
+      // STAGE 5: ログイン成功判定（複数条件での並行待機）
+      console.log('STAGE 5: ログイン成功判定');
+      
+      await Promise.race([
+        page.waitForSelector('a[href*="/service/logout"]', { timeout: 45000 }),
+        page.waitForFunction(() => location.href.includes('/vehicle/'), { timeout: 45000 })
+      ]).catch(() => {
+        console.log('成功判定タイムアウト、現在状態を確認中...');
+      });
+      
+      // STAGE 6: 最終確認と/vehicle/への遷移
+      console.log('STAGE 6: 最終確認');
+      const currentUrl = page.url();
+      const loginSuccess = await isLoggedIn();
+      const onVehiclePage = currentUrl.includes('/vehicle/');
+      
+      console.log('ログイン遷移後 URL:', currentUrl);
+      console.log('ログアウトリンク存在:', loginSuccess);
+      console.log('vehicle ページ到達:', onVehiclePage);
+      
+      if (!loginSuccess && !onVehiclePage) {
+        // vehicle ページに手動遷移を試行
+        console.log('vehicle ページに手動遷移中...');
+        const navSuccess = await safeNavigation(page, 'https://www.iauc.co.jp/vehicle/', { timeout: 45000 });
+        
+        if (!navSuccess) {
+          const debugInfo = await page.evaluate(() => ({
+            title: document.title,
+            bodyPreview: document.body.innerText.substring(0, 500)
+          }));
+          console.log('ログイン失敗デバッグ情報:', debugInfo);
+          throw new Error('ログインに失敗しました（vehicle ページへの遷移も失敗）');
         }
       }
-      return false;
-    });
-
-    if (searchExecuted) {
-      await page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      console.log('ログイン完了！');
     } else {
-      // 次へボタンでも試行
-      await page.evaluate(() => {
-        const nextBtns = Array.from(document.querySelectorAll('button, input'));
-        for (const btn of nextBtns) {
-          const text = (btn.textContent || btn.value || '');
-          if (text === '次へ') {
-            btn.click();
-            return;
-          }
-        }
-      });
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      console.log('既にログイン済み');
     }
-
-    // 7) 業販車フィルタ処理
-    console.log('🎯 業販車フィルタ処理開始...');
     
-    // 結果カラムの絞り込みボタンをクリック
-    const resultButtonClicked = await page.evaluate(() => {
-      // 結果カラムのボタンを探す
-      const buttons = Array.from(document.querySelectorAll('a, button'));
-      for (const btn of buttons) {
-        const classes = btn.className || '';
-        const text = btn.textContent || '';
-        if (classes.includes('narrow_button') && (classes.includes('result') || text.includes('結果'))) {
-          btn.click();
-          console.log('✅ 結果ボタンクリック');
-          return true;
-        }
-      }
-      return false;
-    });
-
-    if (resultButtonClicked) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // 業販車フィルタ選択（未せり、仮出品、申込可）
-      await page.evaluate(() => {
-        const checkboxes = document.querySelectorAll('input[type="checkbox"]');
-        const labels = document.querySelectorAll('label');
-        
-        ['未せり', '仮出品', '申込可'].forEach(filterText => {
-          // ラベルテキストで検索
-          for (const label of labels) {
-            if (label.textContent && label.textContent.includes(filterText)) {
-              const checkbox = label.querySelector('input[type="checkbox"]') || 
-                             document.querySelector(`input[type="checkbox"][value*="${filterText}"]`);
-              if (checkbox) {
-                checkbox.checked = true;
-                checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-                console.log(`✅ ${filterText}選択完了`);
-              }
-            }
-          }
-        });
-      });
-      
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // OKボタンクリック
-      await page.evaluate(() => {
-        const okButtons = Array.from(document.querySelectorAll('button, input'));
-        for (const btn of okButtons) {
-          const text = (btn.textContent || btn.value || '');
-          if (text === 'OK' || text === 'ok') {
-            btn.click();
-            console.log('✅ OKボタンクリック');
-            return;
-          }
-        }
-      });
-      
-      await new Promise(resolve => setTimeout(resolve, 3000));
+    // 会場選択ページへ（安定化処理）
+    console.log('会場選択ページへ移動中...');
+    const vehicleNavSuccess = await safeNavigation(page, 'https://www.iauc.co.jp/vehicle/', { timeout: 60000 });
+    
+    if (!vehicleNavSuccess) {
+      console.log('会場選択ページ遷移に失敗、現在のページで処理継続');
+      // 現在のページで処理を継続
     }
+    
+    console.log('現在のページURL:', page.url(), 'title:', await page.title());
 
-    // 8) 予算・走行距離フィルタ
-    console.log('💰 予算フィルタ処理...');
-    if (budget) {
-      const budgetAmount = toNumberYen(budget);
-      
-      const priceFilterClicked = await page.evaluate(() => {
-        // スタートカラムのボタンを探す
-        const buttons = Array.from(document.querySelectorAll('a, button'));
-        for (const btn of buttons) {
-          const classes = btn.className || '';
-          const text = btn.textContent || '';
-          if (text.includes('スタート') || classes.includes('start')) {
-            btn.click();
-            console.log('✅ 価格フィルタボタンクリック');
-            return true;
-          }
-        }
-        return false;
-      });
-      
-      if (priceFilterClicked) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // 価格入力
-        await page.evaluate((amount) => {
-          const inputs = document.querySelectorAll('input[type="text"], input[type="number"]');
-          for (const input of inputs) {
-            const id = input.id || '';
-            const name = input.name || '';
-            if (id.includes('startPrice') || name.includes('price') || id.includes('To')) {
-              input.value = amount;
-              input.dispatchEvent(new Event('input', { bubbles: true }));
-              console.log('✅ 価格入力完了:', amount);
+   // セッション安定化のため長めに待機（同時ログイン対策）
+    await sleep(10000);
+
+// --- お知らせ/モーダル自動クローズ → 検索UIへ復旧 ---
+    console.log('お知らせ画面・モーダルの確認中...');
+
+    // モーダル/オーバーレイの閉じるボタンを探してクリック
+    const closeButtonSelectors = [
+      'button:contains("閉じる")', 'button:contains("×")', 'button:contains("OK")',
+      '.close', '.btn-close', '.modal-close', '[aria-label="close"]',
+      '.overlay-close', '.popup-close', '.notice-close'
+    ];
+
+    for (const selector of closeButtonSelectors) {
+      try {
+        if (selector.includes(':contains')) {
+          const buttons = await page.$$('button, a, span');
+          for (const button of buttons) {
+            const text = await page.evaluate(btn => btn.textContent, button);
+            if (text && (text.includes('閉じる') || text.includes('×') || text.includes('OK'))) {
+              console.log('お知らせ閉じるボタン発見、クリック中...');
+              await button.click();
+              await sleep(2000);
               break;
             }
           }
-        }, budgetAmount);
-        
-        // OK実行
-        await page.evaluate(() => {
-          const okBtn = document.querySelector('button:contains("OK"), input[value="OK"]') ||
-                       Array.from(document.querySelectorAll('button')).find(btn => btn.textContent === 'OK');
-          if (okBtn) okBtn.click();
-        });
-        
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        } else {
+          const closeBtn = await page.$(selector);
+          if (closeBtn) {
+            console.log('モーダル閉じるボタン発見:', selector);
+            await closeBtn.click();
+            await sleep(2000);
+            break;
+          }
+        }
+      } catch (e) {
+        // エラーは無視して次へ
       }
     }
 
-    // 9) 走行距離フィルタ
-    console.log('📏 走行距離フィルタ処理...');
-    if (mileage) {
-      const mileageNum = toNumberKm(mileage);
-      
-      const mileageFilterClicked = await page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('a, button'));
-        for (const btn of buttons) {
-          const text = btn.textContent || '';
-          if (text.includes('走行') || text === '走行') {
-            btn.click();
-            console.log('✅ 走行距離フィルタボタンクリック');
-            return true;
+    // UI要素の確認
+    const uiSelectors = ['#btn_vehicle_everyday_all', '#vehicle_everyday .checkbox_on_all', '#btn_vehicle_day_all'];
+    let uiFound = false;
+    for (const s of uiSelectors) { 
+      const el = await page.$(s);
+      if (el) { 
+        uiFound = true; 
+        break; 
+      } 
+    }
+
+    if (!uiFound) {
+      console.log('UI要素が見つからない、インフォメーション画面の可能性あり');
+      const isInfo = await page.evaluate(() => {
+        const body = (document.body?.innerText || '');
+        return /インフォメーション|Information/i.test(document.title) || /インフォメーション|Information/i.test(body);
+      });
+
+      if (isInfo) {
+        console.log('vehicle はインフォメーション画面。復旧リンクを探索します...');
+        const clicked = await page.evaluate(() => {
+          const links = Array.from(document.querySelectorAll('a'));
+          const hit = links.find(a =>
+            /検索|会場|車両|フリーワード/.test(a.textContent || '') ||
+            /vehicle\/(search|list|)/.test(a.getAttribute('href') || '')
+          );
+          if (hit) { hit.click(); return true; }
+          return false;
+        });
+        
+        if (clicked) {
+          await sleep(5000); // ナビゲーション待機を固定時間に
+          console.log('復旧後URL:', page.url());
+        } else {
+          // 直接 vehicle 再ロード
+          await safeNavigation(page, 'https://www.iauc.co.jp/vehicle/');
+        }
+      }
+    }
+
+    // 改良された safeClick 関数
+    async function safeClick(selectors, timeout = 60000) {
+      const sels = Array.isArray(selectors) ? selectors : [selectors];
+      const start = Date.now();
+
+      while (Date.now() - start < timeout) {
+        // メインページで試行
+        for (const s of sels) {
+          try {
+            const el = await page.$(s);
+            if (el) {
+              console.log(`要素発見（メインページ）: ${s}`);
+              await page.click(s);
+              await sleep(1000);
+              return true;
+            }
+          } catch (e) {
+            // 個別要素エラーは無視して次を試行
           }
         }
-        return false;
-      });
-      
-      if (mileageFilterClicked) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
         
-        // 走行距離チェックボックス選択
-        await page.evaluate((maxMileage) => {
-          const mileageLimit = Math.floor(maxMileage / 10000); // 万km単位
-          const checkboxes = document.querySelectorAll('input[type="checkbox"]');
-          const labels = document.querySelectorAll('label');
-          
-          // 指定上限以下の項目をすべてチェック
-          for (let i = 1; i <= mileageLimit; i++) {
-            for (const label of labels) {
-              const text = label.textContent || '';
-              if (text.includes(`${i}万km`) || text.includes(`${i}万`)) {
-                const checkbox = label.querySelector('input[type="checkbox"]');
-                if (checkbox) {
-                  checkbox.checked = true;
-                  checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-                  console.log(`✅ ${i}万km選択`);
-                }
+        // フレーム内で試行（メインで見つからない場合のみ）
+        for (const s of sels) {
+          for (const f of page.frames()) {
+            try {
+              const el = await f.$(s);
+              if (el) {
+                console.log(`要素発見（フレーム内）: ${s}`);
+                await f.click(s);
+                await sleep(1000);
+                return true;
               }
+            } catch (e) {
+              // フレームエラーは無視
             }
           }
-        }, mileageNum);
+        }
         
-        // OK実行
-        await page.evaluate(() => {
-          const okBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.textContent === 'OK');
-          if (okBtn) okBtn.click();
-        });
-        
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await sleep(1000);
       }
+
+      // デバッグ出力
+      console.log('要素が見つからない、現在のページ状態をデバッグ');
+      try {
+        const candidates = await page.$$eval('a[id^="btn_vehicle_"], button, .btn',
+          els => els.slice(0, 10).map(e => ({ 
+            tag: e.tagName, 
+            id: e.id, 
+            className: e.className, 
+            text: (e.textContent||'').trim().substring(0, 50) 
+          })));
+        console.log('見つかった候補要素:', candidates);
+      } catch {}
+      
+      console.log(`警告: セレクタが見つかりませんでした: ${sels.join(', ')}`);
+      return false; // エラーではなく false を返す
     }
 
-    // 10) 価格昇順ソート
-    console.log('⬆️ 価格昇順ソート実行...');
-    await page.evaluate(() => {
-      // スタートカラムの上向き三角ボタンを探す
-      const sortButtons = Array.from(document.querySelectorAll('a, button, span'));
-      for (const btn of sortButtons) {
-        const classes = btn.className || '';
-        const title = btn.title || '';
-        if (classes.includes('sort_button') && 
-           (title.includes('並び替え') || classes.includes('asc'))) {
-          btn.click();
-          console.log('✅ 価格昇順ソート実行');
-          return;
-        }
+    // 共有在庫＆一発落札「全選択」
+    console.log('共有在庫の全選択中...');
+    const everydaySuccess = await safeClick([
+      '#btn_vehicle_everyday_all',
+      '#vehicle_everyday .checkbox_on_all',
+      'a.title-green-button.checkbox_on_all[data-target="#vehicle_everyday"]'
+    ], 45000);
+
+    if (!everydaySuccess) {
+      console.log('共有在庫全選択に失敗、処理を継続');
+    }
+
+    // オークション＆入札会「全選択」
+    console.log('オークション&入札会の全選択中...');
+    const daySuccess = await safeClick([
+      '#btn_vehicle_day_all',
+      '#vehicle_day .checkbox_on_all',
+      'a.title-button.checkbox_on_all[data-target="#vehicle_day"]'
+    ], 45000);
+
+    if (!daySuccess) {
+      console.log('オークション全選択に失敗、処理を継続');
+    }
+
+    // 「次へ」
+    console.log('次へボタンをクリック中...');
+    const nextSuccess = await safeClick([
+      'button.page-next-button[onclick*="check_sites"]',
+      'button.page-next-button',
+      '.page-next-button'
+    ], 45000);
+
+   if (nextSuccess) {
+      // ナビゲーション待機（エラー耐性あり）
+      try {
+        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 });
+        console.log('次へボタン後の遷移完了');
+      } catch (navError) {
+        console.log('次へボタン後の遷移待機タイムアウト、処理継続');
       }
+      // フリーワード検索タブが表示されるまで十分待機
+      await sleep(10000);
+      console.log('フリーワード検索タブ表示待機完了');
+    } else {
+      console.log('次へボタンが見つからない、現在のページで処理継続');
+    }
+    
+    // フリーワード検索タブ - 改良版
+    console.log('フリーワード検索実行中...');
+    
+    // 現在のページ状態をデバッグ
+    const currentUrl2 = page.url();
+    console.log('フリーワード検索前URL:', currentUrl2);
+    
+    // フリーワード検索タブクリック（より確実な待機付き）
+    console.log('フリーワード検索タブ要素確認中...');
+    await page.waitForSelector('#button_freeword_search', { timeout: 20000 }).catch(() => {
+      console.log('フリーワード検索タブ待機タイムアウト');
     });
     
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // 11) 検索結果データ取得
-    console.log('📊 検索結果データ取得中...');
+    const freewordTabSuccess = await safeClick([
+      '#button_freeword_search', 
+      'a#button_freeword_search', 
+      'a[href="#freeword"]#button_freeword_search',
+      'a[href*="freeword"]'
+    ], 30000);
     
-    const results = await page.evaluate(() => {
-      const items = [];
-      
-      // テーブル行を取得
-      const rows = document.querySelectorAll('tbody tr, .list-item, .vehicle-item');
-      
-      rows.forEach((row, index) => {
-        try {
-          const cells = row.querySelectorAll('td, .cell, .item-data');
+    if (!freewordTabSuccess) {
+      console.log('フリーワード検索タブが見つからない、別の方法を試行');
+    }
+    
+    // クリック後の待機
+    await sleep(2000);
+    
+    // フリーワード入力フィールドを探す
+    const freewordSelectors = [
+      'input[name="freeword"]',
+      'input[name="freeword_search"]', 
+      'input[type="text"]',
+      '#freeword',
+      '.freeword-input'
+    ];
+    
+    let inputFound = false;
+    for (const selector of freewordSelectors) {
+      try {
+        const element = await page.$(selector);
+        if (element) {
+          console.log('入力フィールド発見:', selector);
           
-          // サムネイル画像
-          const img = row.querySelector('img');
-          const imageUrl = img ? img.src : '';
-          
-          // 車名とグレード（最初のセルまたはタイトル要素）
-          const titleEl = row.querySelector('h1, h2, h3, h4, .title, .name') || cells[1];
-          const title = titleEl ? titleEl.textContent.trim() : `車両 ${index + 1}`;
-          
-          // 価格抽出
-          const rowText = row.textContent || '';
-          const priceMatch = rowText.match(/(\d+(?:,\d+)*(?:\.\d+)?)万?円/);
-          const price = priceMatch ? priceMatch[0] : '価格要確認';
-          
-          // 走行距離抽出
-          const kmMatch = rowText.match(/(\d+(?:,\d+)*(?:\.\d+)?)(?:千)?km/i);
-          const mileage = kmMatch ? kmMatch[0] : '走行距離要確認';
-          
-          // 年式抽出
-          const yearMatch = rowText.match(/([HRS]?\d{1,2}年|\d{4}年)/);
-          const year = yearMatch ? yearMatch[0] : '年式要確認';
-          
-          // 会場名・地区抽出（オークションハウス情報）
-          const venueMatch = rowText.match(/(LAP|TAA|JU|オークネット|ミライブ).*?[都道府県市区町村]/);
-          const venue = venueMatch ? venueMatch[0] : '会場要確認';
-          const location = venue.includes('東京') ? '関東' : 
-                          venue.includes('大阪') ? '関西' : 
-                          venue.includes('愛知') ? '中部' : '地区要確認';
-          
-          // 詳細URLの取得
-          const link = row.querySelector('a');
-          const detailUrl = link ? link.href : '';
-          
-          items.push({
-            imageUrl,
-            title,
-            mileage,
-            price,
-            year,
-            venue,
-            location,
-            detailUrl
-          });
-          
-        } catch (error) {
-          console.log(`車両${index + 1}のデータ抽出エラー:`, error);
+          // キーワード入力
+          console.log('キーワード入力中:', keyword);
+          await page.focus(selector);
+          await page.type(selector, keyword, { delay: 50 });
+          inputFound = true;
+          break;
         }
+      } catch (e) {
+        continue;
+      }
+    }
+    
+    if (!inputFound) {
+      console.log('入力フィールドが見つからない');
+      // デバッグ情報
+      const inputDebug = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('input')).map(input => ({
+          name: input.name,
+          type: input.type,
+          id: input.id,
+          visible: input.offsetParent !== null
+        }));
+      });
+      console.log('見つかった入力フィールド:', inputDebug);
+      throw new Error('フリーワード入力フィールドが見つかりません');
+    }
+    
+    // 検索実行
+    console.log('検索実行中...');
+    const searchButtonSelectors = [
+      'button.button.corner-radius',
+      'button[type="submit"]',
+      'input[value="検索"]',
+      '.search-button',
+      'button:contains("検索")'
+    ];
+    
+    let searchExecuted = false;
+    for (const btnSelector of searchButtonSelectors) {
+      try {
+        if (btnSelector.includes(':contains')) {
+          const buttons = await page.$$('button, input[type="submit"]');
+          for (const button of buttons) {
+            const text = await page.evaluate(btn => btn.textContent || btn.value, button);
+            if (text && text.includes('検索')) {
+              await button.click();
+              searchExecuted = true;
+              console.log('検索ボタンクリック完了（テキストベース）');
+              break;
+            }
+          }
+        } else {
+          const btn = await page.$(btnSelector);
+          if (btn) {
+            console.log('検索ボタン発見:', btnSelector);
+            await btn.click();
+            searchExecuted = true;
+            break;
+          }
+        }
+        if (searchExecuted) break;
+      } catch (e) {
+        continue;
+      }
+    }
+    
+    if (!searchExecuted) {
+      console.log('検索ボタンが見つからないため、Enterキーで実行');
+      await page.keyboard.press('Enter');
+    }
+    
+    // 検索結果ページ遷移待機（エラー耐性強化）
+    try {
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 });
+      console.log('検索結果ページに遷移完了');
+    } catch (error) {
+      console.log('検索結果ページ遷移待機タイムアウト、現在のページで継続');
+      await sleep(5000);
+    }
+    
+    // 結果行が描画されるまで待つ（エラー耐性あり）
+    try {
+      await page.waitForSelector('tbody tr', { timeout: 20000 });
+      console.log('検索結果テーブル発見');
+    } catch (e) {
+      console.log('検索結果テーブル待機タイムアウト');
+    }
+
+    // 「結果」ボタンをクリックしてフィルタダイアログを開く
+    console.log('「結果」ボタンをクリック中...');
+    const resultButtonSelectors = [
+      'a.narrow_button.result',
+      '[data-element="transactionStatusId"]',
+      'a[title*="絞り込み"]'
+    ];
+    
+    let resultButtonFound = false;
+    for (const selector of resultButtonSelectors) {
+      const resultButton = await page.$(selector);
+      if (resultButton) {
+        console.log('結果ボタン発見:', selector);
+        await resultButton.click();
+        resultButtonFound = true;
+        break;
+      }
+    }
+    
+    if (!resultButtonFound) {
+      console.log('結果ボタンが見つかりません');
+    }
+    
+    // フィルタダイアログの待機
+    await sleep(2000);
+    
+    // 業販車のみ選択（仮出品・未せり・申込可）
+    console.log('業販車フィルタを選択中...');
+    
+    await page.evaluate(() => {
+      // 全てのチェックボックスを一旦クリア
+      const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+      checkboxes.forEach(cb => {
+        if (cb.checked) cb.click();
       });
       
-      return items.slice(0, 10); // 最大10件
-    });
-
-    console.log(`✅ ${results.length}件の検索結果を取得`);
-    results.forEach((item, i) => {
-      console.log(`${i + 1}: ${item.title} - ${item.price} - ${item.mileage}`);
+      // 必要な項目のみ選択
+      const targetLabels = ['仮出品', '未せり', '申込可'];
+      
+      for (const label of targetLabels) {
+        // ラベルテキストから該当するチェックボックスを探す
+        const labels = Array.from(document.querySelectorAll('label'));
+        const targetLabel = labels.find(l => l.textContent && l.textContent.includes(label));
+        
+        if (targetLabel) {
+          // ラベルに対応するチェックボックスを探す
+          const checkbox = targetLabel.querySelector('input[type="checkbox"]') ||
+                          document.querySelector(`input[id="${targetLabel.getAttribute('for')}"]`);
+          
+          if (checkbox && !checkbox.checked) {
+            checkbox.click();
+            console.log(`${label} を選択しました`);
+          }
+        }
+      }
     });
     
-    // URL補正
-    results.forEach(item => {
-      if (item.detailUrl && !item.detailUrl.startsWith('http')) {
-        item.detailUrl = 'https://www.iauc.co.jp' + item.detailUrl;
+    // OKボタンをクリック
+    console.log('OKボタンをクリック中...');
+    const okButtonSelectors = [
+      'button:contains("OK")',
+      'input[value="OK"]',
+      '.btn:contains("OK")',
+      'button.btn'
+    ];
+    
+    let okButtonFound = false;
+    for (const selector of okButtonSelectors) {
+      try {
+        if (selector.includes(':contains')) {
+          const buttons = await page.$$('button, input[type="submit"]');
+          for (const button of buttons) {
+            const text = await page.evaluate(btn => btn.textContent || btn.value, button);
+            if (text && text.includes('OK')) {
+              await button.click();
+              okButtonFound = true;
+              console.log('OKボタンクリック完了');
+              break;
+            }
+          }
+        } else {
+          const okBtn = await page.$(selector);
+          if (okBtn) {
+            await okBtn.click();
+            okButtonFound = true;
+            console.log('OKボタンクリック完了:', selector);
+            break;
+          }
+        }
+        if (okButtonFound) break;
+      } catch (e) {
+        console.log('OKボタンセレクタ失敗:', selector);
       }
-      if (item.imageUrl && !item.imageUrl.startsWith('http')) {
-        item.imageUrl = 'https://www.iauc.co.jp' + item.imageUrl;
+    }
+    
+    if (!okButtonFound) {
+      console.log('OKボタンが見つからないため、Enterキーで確定');
+      await page.keyboard.press('Enter');
+    }
+    
+    // フィルタ適用後の待機
+    await sleep(3000);
+    
+    // 正確なセレクタでスクレイピング実行
+    console.log('正確なセレクタで業販車情報をスクレイピング中...');
+    const items = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('tbody tr'));
+      console.log('フィルタ後の行数:', rows.length);
+      
+      if (rows.length <= 1) return [];
+      
+      const vehicles = [];
+      
+      for (let i = 1; i < rows.length && vehicles.length < 10; i++) {
+        const row = rows[i];
+        
+        // 各データを正確なセレクタで取得
+        const vehicleName = row.querySelector('[data-element="vehicleName"]')?.textContent?.trim() || '';
+        const grade = row.querySelector('[data-element="grade"]')?.textContent?.trim() || '';
+        const sfield = row.querySelector('[data-element="sfield"]')?.textContent?.trim() || '';
+        const district = row.querySelector('[data-element="district"]')?.textContent?.trim() || '';
+        const modelYear = row.querySelector('[data-element="modelOfYear"]')?.textContent?.trim() || '';
+        const type = row.querySelector('[data-element="type"]')?.textContent?.trim() || '';
+        const mileage = row.querySelector('[data-element="mileage"]')?.textContent?.trim() || '';
+        const startPrice = row.querySelector('[data-element="startPrice"]')?.textContent?.trim() || '';
+        const transactionStatus = row.querySelector('[data-element="transactionStatusId"]')?.textContent?.trim() || '';
+        
+        // 車両画像
+        const imgElement = row.querySelector('img.img-car.lazy-table.visited');
+        const imageUrl = imgElement ? imgElement.src : '';
+        
+        // 詳細リンク（data-lid属性から構築）
+        const dataLid = row.getAttribute('data-lid');
+        const url = dataLid ? `https://www.iauc.co.jp/vehicle/detail/${dataLid}` : '';
+        
+        // 価格から数値抽出（ソート用）
+        const priceMatch = startPrice.match(/(\d+(?:\.\d+)?)/);
+        const priceNum = priceMatch ? parseFloat(priceMatch[1]) : 999999;
+        
+        vehicles.push({
+          title: vehicleName || `車両 ${vehicles.length + 1}`,
+          grade: grade,
+          sfield: sfield,
+          district: district,
+          year: modelYear,
+          type: type,
+          km: mileage || '走行距離情報なし',
+          price: startPrice || '価格情報なし',
+          status: transactionStatus,
+          imageUrl: imageUrl,
+          url: url,
+          priceNum: priceNum
+        });
       }
+      
+      // 価格順でソート（安い順）
+      vehicles.sort((a, b) => a.priceNum - b.priceNum);
+      
+      console.log('スクレイピング完了:', vehicles.length, '件');
+      return vehicles.slice(0, 5); // 上位5件のみ
     });
 
-    return results;
-
+    console.log('業販車スクレイピング完了 件数:', items.length);
+    return items;
+  
   } catch (error) {
-    console.error('❌ 検索エラー:', error);
-    return [];
+    console.error('検索エラー:', error);
+    console.error('スタックトレース:', error.stack);
+    throw error;
   } finally {
-    if (page) await page.close().catch(console.error);
-    if (browser) await browser.close().catch(console.error);
+    try { if (page) await page.close(); }   catch (e) { console.error(e); }
+    try { if (browser) await browser.close(); } catch (e) { console.error(e); }
   }
 }
 
-// イベントハンドラ
 async function handleEvent(event) {
-  console.log('📨 イベント受信:', event.type);
+  console.log('イベント受信:', event.type, event.message?.type);
   
   if (event.type !== 'message' || event.message.type !== 'text') return;
 
-  const uid = event.source.userId;
-  const text = event.message.text.trim();
+  const uid   = event.source.userId;
+  const text  = event.message.text.trim();
   const token = event.replyToken;
 
-  console.log('💬 受信:', text);
+  console.log('ユーザーID:', uid);
+  console.log('受信テキスト:', text);
 
-  // 「戻る」コマンドで最初から
-  if (text === '戻る') {
-    sessions.delete(uid);
-    return client.replyMessage(token, {
-      type: 'text',
-      text: '🔄 最初からやり直します。\n\n' + QUESTIONS.maker
-    });
-  }
-
-  // 初回またはリセット後
+  // 初回質問
   if (!sessions.has(uid)) {
+    console.log('新規セッション開始');
     sessions.set(uid, { step: 0, data: {} });
-    return client.replyMessage(token, {
-      type: 'text',
-      text: '🚗 IAuc車両検索へようこそ！\n\n質問に答えて検索条件を設定してください。\n\n' + QUESTIONS.maker
-    });
+    return client.replyMessage(token, { type:'text', text: QUESTIONS.keyword });
   }
 
-  // セッション更新
+  // 回答保存＆次へ
   const session = sessions.get(uid);
-  const field = FIELDS[session.step];
-  
-  // パスの場合は空文字として保存
-  session.data[field] = (text === 'パス') ? '' : text;
+  const field   = FIELDS[session.step];
+  session.data.keyword = text;
   session.step++;
 
-  console.log('📊 セッション:', session);
-
-  // 次の質問
-  if (session.step < FIELDS.length) {
-    const nextField = FIELDS[session.step];
-    return client.replyMessage(token, {
-      type: 'text',
-      text: QUESTIONS[nextField]
-    });
-  }
-
-  // 全質問終了 → 検索実行
-  console.log('🔍 検索条件確定:', session.data);
-  
+  console.log('セッション更新:', session);
+ 
+  // 終了メッセージ
+  console.log('検索開始 - 収集した条件:', session.data);
   await client.replyMessage(token, {
     type: 'text',
-    text: '✅ 検索条件を受け付けました！\n\n🔍 IAucで検索中...\n（約30秒お待ちください）'
+    text: '検索結果を取得中…少々お待ちください！'
   });
 
   try {
-    const results = await searchIauc(session.data);
-    
+    // IAuc 検索実行
+    console.log('IAuc検索を開始...');
+    const results = await fetchIaucResults(session.data);
+    console.log('検索結果:', results?.length || 0, '件');
+
+    // 0件ならテキスト通知して終了
     if (!results || results.length === 0) {
+      console.log('検索結果が0件でした');
       await client.pushMessage(uid, {
         type: 'text',
-        text: '😔 該当する車両が見つかりませんでした。\n\n検索条件を変更してお試しください。\n何か入力すると最初から検索できます。'
+        text: '該当する車両が見つかりませんでした。検索キーワードを変更してもう一度お試しください。'
       });
-    } else {
-      // Flexメッセージ作成（7項目表示）
-      const bubbles = results.slice(0, 5).map(item => ({
-        type: 'bubble',
-        hero: item.imageUrl ? {
-          type: 'image',
-          url: item.imageUrl || 'https://via.placeholder.com/240x180/cccccc/000000?text=No+Image',
-          size: 'full',
-          aspectRatio: '4:3',
-          aspectMode: 'cover',
-        } : undefined,
-        body: {
-          type: 'box',
-          layout: 'vertical',
-          contents: [
-            {
-              type: 'text',
-              text: item.title,
-              weight: 'bold',
-              size: 'md',
-              wrap: true
-            },
-            {
-              type: 'text',
-              text: `💰 ${item.price}`,
-              margin: 'sm',
-              color: '#FF5551',
-              size: 'sm'
-            },
-            {
-              type: 'text',
-              text: `📏 ${item.mileage}`,
-              margin: 'xs',
-              color: '#666666',
-              size: 'sm'
-            },
-            {
-              type: 'text',
-              text: `📅 ${item.year}`,
-              margin: 'xs',
-              color: '#666666',
-              size: 'xs'
-            },
-            {
-              type: 'text',
-              text: `🏢 ${item.venue}`,
-              margin: 'xs',
-              color: '#999999',
-              size: 'xs'
-            },
-            {
-              type: 'text',
-              text: `📍 ${item.location}`,
-              margin: 'xs',
-              color: '#999999',
-              size: 'xs'
-            }
-          ]
-        },
-        footer: item.detailUrl ? {
-          type: 'box',
-          layout: 'vertical',
-          contents: [{
+      sessions.delete(uid);
+      return;
+    }
+
+    // Flex メッセージ用バブル生成
+    console.log('Flexメッセージを生成中...');
+    const bubbles = results.slice(0,5).map(item => ({
+      type: 'bubble',
+      hero: {
+        type: 'image',
+        url: item.imageUrl || 'https://via.placeholder.com/240x180?text=車両画像',
+        size: 'full',
+        aspectRatio: '4:3',
+        aspectMode: 'cover',
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          { type: 'text', text: item.title, weight: 'bold', size: 'lg', wrap: true },
+          { type: 'text', text: item.grade || 'グレード情報なし', size: 'sm', color: '#666666', margin: 'sm' },
+          { type: 'separator', margin: 'md' },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'md',
+            contents: [
+              { type: 'text', text: '地区:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.district || '-', size: 'sm', flex: 2 }
+            ]
+          },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'sm',
+            contents: [
+              { type: 'text', text: '年式:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.year || '-', size: 'sm', flex: 2 }
+            ]
+          },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'sm',
+            contents: [
+              { type: 'text', text: '走行:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.km, size: 'sm', flex: 2 }
+            ]
+          },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'sm',
+            contents: [
+              { type: 'text', text: '色:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.color || '-', size: 'sm', flex: 2 }
+            ]
+          },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'sm',
+            contents: [
+              { type: 'text', text: 'シフト:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.shift || '-', size: 'sm', flex: 2 }
+            ]
+          },
+          { 
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'sm',
+            contents: [
+              { type: 'text', text: '評価:', size: 'sm', color: '#555555', flex: 1 },
+              { type: 'text', text: item.rating || '-', size: 'sm', flex: 2 }
+            ]
+          },
+          { type: 'separator', margin: 'md' },
+          { type: 'text', text: item.price, weight: 'bold', size: 'xl', color: '#FF5551', margin: 'md', align: 'center' },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
             type: 'button',
             style: 'primary',
-            color: '#0066CC',
+            height: 'sm',
             action: {
               type: 'uri',
               label: '詳細を見る',
-              uri: item.detailUrl
-            }
-          }]
-        } : undefined
-      }));
+              uri: item.url || 'https://www.iauc.co.jp',
+            },
+          },
+        ],
+      },
+    }));
+   
+    // Flex メッセージで検索結果を返信
+    console.log('検索結果を送信中...');
+    await client.pushMessage(uid, {
+      type: 'flex',
+      altText: 'IAuc 検索結果はこちらです',
+      contents: {
+        type: 'carousel',
+        contents: bubbles,
+      },
+    });
+    console.log('検索結果送信完了');
 
-      await client.pushMessage(uid, {
-        type: 'flex',
-        altText: `🚗 ${results.length}件の車両が見つかりました`,
-        contents: {
-          type: 'carousel',
-          contents: bubbles
-        }
-      });
-
-      // 追加の車両がある場合はテキストでも表示
-      if (results.length > 5) {
-        let additionalText = '📋 追加の車両情報:\n\n';
-        results.slice(5).forEach((item, index) => {
-          additionalText += `${index + 6}. ${item.title}\n`;
-          additionalText += `💰 ${item.price} 📏 ${item.mileage}\n`;
-          additionalText += `📅 ${item.year} 🏢 ${item.venue}\n\n`;
-        });
-        
-        await client.pushMessage(uid, {
-          type: 'text',
-          text: additionalText
-        });
-      }
-
-      await client.pushMessage(uid, {
-        type: 'text',
-        text: `✨ ${results.length}件の車両が見つかりました！\n\n別の条件で検索する場合は、何か入力してください。`
-      });
-    }
   } catch (error) {
-    console.error('❌ エラー:', error);
+    console.error('検索処理でエラーが発生:', error);
+    console.error('スタックトレース:', error.stack);
+    
     await client.pushMessage(uid, {
       type: 'text',
-      text: '⚠️ エラーが発生しました。\nしばらく待ってから再度お試しください。'
+      text: 'エラーが発生しました。しばらく経ってから再度お試しください。'
     }).catch(console.error);
   } finally {
+    // 会話セッションをクリア
+    console.log('セッションをクリア');
     sessions.delete(uid);
   }
 }
 
-// エラーハンドラ
+// エラー時も 200 応答
 app.use((err, req, res, next) => {
-  console.error('Express Error:', err);
+  console.error(err);
   res.sendStatus(200);
 });
 
-// サーバー起動
+// 起動
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`⚡️ Server running on port ${PORT}`);
-  console.log('🚀 IAuc Bot Started - Complete Fixed Version');
-  console.log('📋 環境変数チェック:');
-  console.log('- LINE_CHANNEL_SECRET:', process.env.LINE_CHANNEL_SECRET ? '✅' : '❌');
-  console.log('- LINE_CHANNEL_TOKEN:', process.env.LINE_CHANNEL_TOKEN ? '✅' : '❌');
-  console.log('- IAUC_USER_ID:', process.env.IAUC_USER_ID ? '✅' : '❌');
-  console.log('- IAUC_PASSWORD:', process.env.IAUC_PASSWORD ? '✅' : '❌');
-  console.log('- PUPPETEER_EXECUTABLE_PATH:', process.env.PUPPETEER_EXECUTABLE_PATH || 'default');
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
