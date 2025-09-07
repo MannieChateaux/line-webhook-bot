@@ -652,6 +652,8 @@ for (const selector of targetCheckboxes) {
   if (checkbox && !checkbox.checked) {
     checkbox.click();
     console.log(`チェックボックス選択: ${selector}`);
+  } else {
+    console.log(`チェックボックス状態: ${selector} - 存在:${!!checkbox}, チェック済み:${checkbox?.checked}`);
   }
 }
     });
@@ -717,7 +719,7 @@ await sleep(2000);
 
 // 5. 価格入力処理
 console.log('価格入力処理中...');
-const budgetValue = session.data.budget;
+const budgetValue = budget;
 if (budgetValue) {
   // 万円変換（例：500万円 → 500、5000000円 → 500）
   const budgetNum = toNumberYen(budgetValue);
@@ -759,7 +761,7 @@ await sleep(2000);
 
 // 8. 走行距離チェックボックス選択
 console.log('走行距離チェックボックス選択中...');
-const mileageValue = session.data.mileage;
+const mileageValue = mileage;
 if (mileageValue) {
   const mileageNum = parseInt(toNumberKm(mileageValue));
   if (mileageNum) {
