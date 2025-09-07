@@ -432,7 +432,7 @@ console.log('フリーワード検索開始:', keyword);
       '#btn_vehicle_everyday_all',
       '#vehicle_everyday .checkbox_on_all',
       'a.title-green-button.checkbox_on_all[data-target="#vehicle_everyday"]'
-    ], 30000);
+    ], 45000);
 
     if (!everydaySuccess) {
       console.log('共有在庫全選択に失敗、処理を継続');
@@ -444,7 +444,7 @@ console.log('フリーワード検索開始:', keyword);
       '#btn_vehicle_day_all',
       '#vehicle_day .checkbox_on_all',
       'a.title-button.checkbox_on_all[data-target="#vehicle_day"]'
-    ], 30000);
+    ], 45000);
 
     if (!daySuccess) {
       console.log('オークション全選択に失敗、処理を継続');
@@ -456,7 +456,7 @@ console.log('フリーワード検索開始:', keyword);
       'button.page-next-button[onclick*="check_sites"]',
       'button.page-next-button',
       '.page-next-button'
-    ], 30000);
+    ], 45000);
 
    if (nextSuccess) {
       // ナビゲーション待機（エラー耐性あり）
