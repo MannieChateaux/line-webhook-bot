@@ -700,6 +700,118 @@ for (const selector of targetCheckboxes) {
     
     // フィルタ適用後の待機
     await sleep(3000);
+
+    // 4. スタートボタンクリック
+console.log('スタートボタンをクリック中...');
+const startButtonSuccess = await safeClick([
+  'a.narrow_button[data-element="startPrice"]',
+  'a.narrow_button',
+  '.narrow_button'
+], 30000);
+
+if (!startButtonSuccess) {
+  console.log('スタートボタンが見つからない');
+}
+
+await sleep(2000);
+
+// 5. 価格入力処理
+console.log('価格入力処理中...');
+const budgetValue = session.data.budget;
+if (budgetValue) {
+  // 万円変換（例：500万円 → 500、5000000円 → 500）
+  const budgetNum = toNumberYen(budgetValue);
+  const budgetMan = budgetNum ? Math.floor(parseInt(budgetNum) / 10000).toString() : '';
+  
+  if (budgetMan) {
+    console.log('価格入力:', budgetMan, '万円');
+    const priceInput = await page.$('input#startPriceTo_10000');
+    if (priceInput) {
+      await page.focus('input#startPriceTo_10000');
+      await page.keyboard.down('Control');
+      await page.keyboard.press('a');
+      await page.keyboard.up('Control');
+      await page.type('input#startPriceTo_10000', budgetMan, { delay: 50 });
+    }
+  }
+}
+
+await sleep(1000);
+
+// 6. 価格設定OKボタン
+console.log('価格設定OKボタンをクリック中...');
+const priceOkSuccess = await safeClick([
+  'a#narrow_button',
+  '#narrow_button'
+], 30000);
+
+await sleep(2000);
+
+// 7. 走行距離ボタンクリック
+console.log('走行距離ボタンをクリック中...');
+const mileageButtonSuccess = await safeClick([
+  'a.narrow_button.odd[data-element="mileage"]',
+  'a.narrow_button[data-element="mileage"]',
+  '.narrow_button.odd'
+], 30000);
+
+await sleep(2000);
+
+// 8. 走行距離チェックボックス選択
+console.log('走行距離チェックボックス選択中...');
+const mileageValue = session.data.mileage;
+if (mileageValue) {
+  const mileageNum = parseInt(toNumberKm(mileageValue));
+  if (mileageNum) {
+    await page.evaluate((maxKm) => {
+      // 上限に応じて該当する全ての項目をチェック
+      const checkboxes = [
+        { selector: 'input[type="checkbox"][value="0-10"]', max: 10000 },   // 1万km未満
+        { selector: 'input[type="checkbox"][value="10-20"]', max: 20000 },  // 1万km台
+        { selector: 'input[type="checkbox"][value="20-30"]', max: 30000 },  // 2万km台
+        { selector: 'input[type="checkbox"][value="30-40"]', max: 40000 },  // 3万km台
+        { selector: 'input[type="checkbox"][value="40-50"]', max: 50000 },  // 4万km台
+        { selector: 'input[type="checkbox"][value="50-60"]', max: 60000 },  // 5万km台
+        { selector: 'input[type="checkbox"][value="60-70"]', max: 70000 },  // 6万km台
+        { selector: 'input[type="checkbox"][value="70-80"]', max: 80000 },  // 7万km台
+        { selector: 'input[type="checkbox"][value="80-90"]', max: 90000 },  // 8万km台
+        { selector: 'input[type="checkbox"][value="90-100"]', max: 100000 }, // 9万km台
+        { selector: 'input[type="checkbox"][value="100-110"]', max: 110000 }, // 10万km台
+      ];
+      
+      for (const item of checkboxes) {
+        if (item.max <= maxKm) {
+          const checkbox = document.querySelector(item.selector);
+          if (checkbox && !checkbox.checked) {
+            checkbox.click();
+            console.log(`走行距離チェック: ${item.selector}`);
+          }
+        }
+      }
+    }, mileageNum);
+  }
+}
+
+await sleep(1000);
+
+// 9. 走行距離設定OKボタン
+console.log('走行距離設定OKボタンをクリック中...');
+const mileageOkSuccess = await safeClick([
+  'a#narrow_button',
+  '#narrow_button'
+], 30000);
+
+await sleep(2000);
+
+// 10. 価格昇順ソートボタン
+console.log('価格昇順ソートボタンをクリック中...');
+const sortSuccess = await safeClick([
+  'a.sort_button.asc[data-element="startPrice"]',
+  'a.sort_button.asc',
+  '.sort_button.asc'
+], 30000);
+
+await sleep(3000);
     
     // 正確なセレクタでスクレイピング実行
    const items = await page.evaluate(() => {
